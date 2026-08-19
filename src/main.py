@@ -29,7 +29,7 @@ async def main():
         n_elapsed = perf_counter() - n_start
 
         print(f"Время выполнения конкурентностью: {elapsed:.2f} сек.")
-        print(f"Время выполнения послдеовательно: {n_elapsed:.2f} сек.")
+        print(f"Время выполнения последовательно: {n_elapsed:.2f} сек.")
 
         # Day2
         print("====Day 2====\n")
