@@ -1,9 +1,9 @@
 import asyncio
-import logging
 
 import aiohttp
 
-from .utils import setup_logging
+from .parser import HTMLParser
+from .utils import crawler_logger
 
 
 class AsyncCrawler:
@@ -12,8 +12,6 @@ class AsyncCrawler:
         *,
         max_concurrent: int = 10
     ) -> None:
-        setup_logging()
-
         timeout = aiohttp.ClientTimeout(
             total=30,
             connect=5,
@@ -23,10 +21,10 @@ class AsyncCrawler:
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._max_concurrent = max_concurrent
         self._session = aiohttp.ClientSession(timeout=timeout)
-        self._logger = logging.getLogger("async_crawler")
+        self._parser = HTMLParser()
 
     async def fetch_url(self, url: str) -> str:
-        self._logger.info("Начало загрузки: %s", url)
+        crawler_logger.info("Начало загрузки: %s", url)
 
         try:
             async with (
@@ -36,7 +34,7 @@ class AsyncCrawler:
                 response.raise_for_status()
                 content = await response.text()
 
-                self._logger.info(
+                crawler_logger.info(
                     "Успешно загружено: %s | HTTP %s | символов: %s",
                     url,
                     response.status,
@@ -46,21 +44,21 @@ class AsyncCrawler:
                 return content
 
         except aiohttp.ClientResponseError as error:
-            self._logger.error(
+            crawler_logger.error(
                 "HTTP-ошибка | URL: %s | статус: %s",
                 url,
                 error.status,
             )
 
         except TimeoutError as error:
-            self._logger.error(
+            crawler_logger.error(
                 "Таймаут | URL: %s | тип: %s",
                 url,
                 type(error).__name__,
             )
 
         except aiohttp.ClientError as error:
-            self._logger.error(
+            crawler_logger.error(
                 "Сетевая ошибка | URL: %s | тип: %s | сообщение: %s",
                 url,
                 type(error).__name__,
@@ -86,3 +84,8 @@ class AsyncCrawler:
 
     async def close(self) -> None:
         await self._session.close()
+
+    async def fetch_and_parse(self, url: str) -> dict[str, str]:
+        page_html = await self.fetch_url(url)
+
+        return await self._parser.parse_html(page_html, url)
