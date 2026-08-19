@@ -6,3 +6,6 @@ def setup_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
+
+
+crawler_logger = logging.getLogger("async_crawler")
