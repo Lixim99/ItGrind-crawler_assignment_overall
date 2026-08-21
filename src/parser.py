@@ -1,5 +1,4 @@
 import asyncio
-from collections.abc import Callable
 from urllib.parse import urldefrag, urljoin, urlparse
 
 from bs4 import BeautifulSoup
@@ -120,8 +119,8 @@ class HTMLParser:
     def _extract_safely(
         name: str,
         url: str,
-        default: any,
-        extractor: Callable[[], any],
+        default,
+        extractor,
     ) -> any:
         try:
             return extractor()
