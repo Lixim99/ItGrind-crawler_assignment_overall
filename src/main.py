@@ -41,13 +41,26 @@ async def main():
             print({
                 "url": page["url"],
                 "title": page["title"],
+                "headings": page["headings"],
+                "links": page["links"],
                 "text_length": page["text_length"],
                 "links_count": page["links_count"],
                 "images_count": page["images_count"],
             })
 
+        # Day3
+        print("====Day 3====\n")
+        crawler2 = AsyncCrawler(max_concurrent=5, max_depth=2)
+        results = await crawler2.crawl(
+            start_urls=["https://apple.ru"],
+            max_pages=50,
+            same_domain_only=True
+        )
+        print(f"Обработано {len(results)} страниц")
+
     finally:
         await crawler.close()
+        await crawler2.close()
 
     print(f"Загружено {len(results)} страниц")
 
