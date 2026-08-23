@@ -92,7 +92,14 @@ class AsyncCrawlerTests(unittest.IsolatedAsyncioTestCase):
         max_concurrent: int = 10,
     ) -> AsyncCrawler:
         with patch("src.models.aiohttp.ClientSession", return_value=session):
-            return AsyncCrawler(max_concurrent=max_concurrent)
+            crawler = AsyncCrawler(
+                max_concurrent=max_concurrent,
+                requests_per_second=1_000_000,
+                min_delay=0,
+            )
+
+        crawler.MAX_ATTEMPTS = 1
+        return crawler
 
     async def test_client_session_uses_connect_and_read_timeouts(self) -> None:
         session = FakeSession({})
