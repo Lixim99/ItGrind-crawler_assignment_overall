@@ -7,18 +7,23 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-from .exception import RobotsBlockedError
+from .exception import (
+    NetworkError,
+    ParseError,
+    PermanentError,
+    RobotsBlockedError,
+    TransientError,
+)
 from .limiter import RateLimiter
 from .parser import HTMLParser
 from .queue import CrawlerQueue
+from .retry_strategy import RetryStrategy
 from .robots import RobotsParser
 from .semaphore import SemaphoreManager
 from .utils import crawler_logger, normalize_url
 
 
 class AsyncCrawler:
-    MAX_ATTEMPTS = 3
-
     @property
     def visited_urls(self) -> set:
         return self._visited_urls
@@ -39,8 +44,11 @@ class AsyncCrawler:
         requests_per_second: float = 2.0,
         respect_robots: bool = False,
         min_delay: float = 1.0,
-        user_agent: str = "*"
-
+        user_agent: str = "*",
+        connect_timeout: float = 5.0,
+        read_timeout: float = 10.0,
+        total_timeout: float = 30.0,
+        retry_strategy: RetryStrategy | None = None
     ) -> None:
         if requests_per_second <= 0:
             raise ValueError(
@@ -63,6 +71,9 @@ class AsyncCrawler:
         self._respect_robots = respect_robots
         self._min_delay = min_delay
         self._user_agent = user_agent
+        self._connect_timeout = connect_timeout
+        self._read_timeout = read_timeout
+        self._total_timeout = total_timeout
 
         self._session = aiohttp.ClientSession(
             timeout=timeout,
@@ -112,6 +123,15 @@ class AsyncCrawler:
         self._request_delays: list[float] = []
         self._last_request_started: float | None = None
 
+        self._retry_strategy = retry_strategy or RetryStrategy(
+            max_retries=3,
+            backoff_factor=2.0,
+            retry_on=[
+                TransientError,
+                NetworkError,
+            ],
+        )
+
     async def _get_robots_parser(
         self,
         url: str,
@@ -130,6 +150,16 @@ class AsyncCrawler:
         await parser.fetch_robots(url)
 
         return parser
+
+    def _get_timeout(
+            self,
+            multiplier: float = 1.0
+    ) -> aiohttp.ClientTimeout:
+        return aiohttp.ClientTimeout(
+            total=self._total_timeout * multiplier,
+            connect=self._connect_timeout * multiplier,
+            sock_read=self._read_timeout * multiplier
+        )
 
     def _get_robots_limiter(
         self,
@@ -260,90 +290,81 @@ class AsyncCrawler:
             ),
         }
 
-    async def fetch_url(self, url: str) -> str:
+    async def fetch_url(
+        self,
+        url: str,
+        timeout_multiplier: float = 1.0,
+    ) -> str:
         crawler_logger.info("Начало загрузки: %s", url)
 
-        for attempt in range(self.MAX_ATTEMPTS):
-            await self._wait_before_request(url)
-            await self._semaphore.acquire(url)
+        await self._wait_before_request(url)
+        await self._semaphore.acquire(url)
 
-            try:
-                self._record_request_start()
+        try:
+            self._record_request_start()
 
-                async with self._session.get(url) as response:
-                    response.raise_for_status()
+            timeout = self._get_timeout(multiplier=timeout_multiplier)
 
-                    content = await response.text()
-
-                    crawler_logger.info(
-                        "Успешно загружено: %s | HTTP %s | символов: %s",
-                        url,
-                        response.status,
-                        len(content),
+            async with self._session.get(
+                url,
+                timeout=timeout
+            ) as response:
+                if response.status in {429, 500, 503}:
+                    raise TransientError(
+                        f"HTTP {response.status}",
+                        status=response.status
                     )
 
-                    return content
+                if 400 <= response.status < 500:
+                    raise PermanentError(
+                        f"HTTP {response.status}",
+                        status=response.status
+                    )
 
-            except aiohttp.ClientResponseError as error:
-                crawler_logger.error(
-                    "HTTP-ошибка | URL: %s | "
-                    "статус: %s | попытка: %s",
+                if response.status >= 500:
+                    raise TransientError(
+                        f"HTTP {response.status}",
+                        status=response.status
+                    )
+
+                content = await response.text()
+
+                crawler_logger.info(
+                    "Успешно загружено: %s | HTTP %s | символов: %s",
                     url,
-                    error.status,
-                    attempt + 1,
+                    response.status,
+                    len(content),
                 )
 
-                retryable = (
-                    error.status == 429
-                    or error.status >= 500
-                )
+                return content
 
-                if (
-                    not retryable
-                    or attempt == self.MAX_ATTEMPTS - 1
-                ):
-                    return ""
-
-            except TimeoutError as error:
-                crawler_logger.error(
-                    "Таймаут | URL: %s | "
-                    "тип: %s | попытка: %s",
-                    url,
-                    type(error).__name__,
-                    attempt + 1,
-                )
-
-                if attempt == self.MAX_ATTEMPTS - 1:
-                    return ""
-
-            except aiohttp.ClientError as error:
-                crawler_logger.error(
-                    "Сетевая ошибка | URL: %s | "
-                    "тип: %s | сообщение: %s | "
-                    "попытка: %s",
-                    url,
-                    type(error).__name__,
-                    error,
-                    attempt + 1,
-                )
-
-                if attempt == self.MAX_ATTEMPTS - 1:
-                    return ""
-
-            finally:
-                self._semaphore.release(url)
-
-            backoff = 2 ** attempt
-
-            crawler_logger.info(
-                "Backoff %.2f сек | URL: %s",
-                backoff,
+        except TimeoutError as error:
+            crawler_logger.error(
+                "Таймаут | URL: %s | "
+                "тип: %s",
                 url,
+                type(error).__name__,
             )
 
-            await asyncio.sleep(backoff)
+            raise TransientError(
+                f"Timeout: {url}"
+            ) from error
 
-        return ""
+        except aiohttp.ClientError as error:
+            crawler_logger.error(
+                "Сетевая ошибка | URL: %s | "
+                "тип: %s | сообщение: %s | ",
+                url,
+                type(error).__name__,
+                error,
+            )
+
+            raise NetworkError(
+                f"Network error: {url}: {error}"
+            ) from error
+
+        finally:
+            self._semaphore.release(url)
 
     async def fetch_urls_sequentially(self, urls: list[str]) -> dict[str, str]:
         results = {}
@@ -455,13 +476,38 @@ class AsyncCrawler:
             url = await self._queue.get_next()
             depth = self._url_depths[url]
 
+            attempt = 0
+
+            # Обертка для увеличения timeout при повторных попытках
+            async def fetch_with_timeout(
+                cur_url=url
+            ):
+                nonlocal attempt
+
+                attempt += 1
+
+                return await self.fetch_url(
+                    cur_url,
+                    timeout_multiplier=attempt,
+                )
+
             try:
-                html = await self.fetch_url(url)
+                html = await self._retry_strategy.execute_with_retry(
+                    fetch_with_timeout
+                )
 
                 if not html:
                     raise RuntimeError("Не удалось загрузить страницу")
 
-                parsed_page = await self._parser.parse_html(html, url)
+                try:
+                    parsed_page = await self._parser.parse_html(
+                        html,
+                        url,
+                    )
+                except Exception as error:
+                    raise ParseError(
+                        f"Parse error: {url}"
+                    ) from error
 
                 if depth < self._max_depth:
                     for link in parsed_page.get("links", []):
@@ -498,7 +544,11 @@ class AsyncCrawler:
                 self._queue.mark_processed(url)
 
             except Exception as error:
-                self._failed_urls[url] = str(error)
+                self._failed_urls[url] = {
+                    "type": type(error).__name__,
+                    "message": str(error),
+                }
+
                 self._queue.mark_failed(url, error=str(error))
             else:
                 self._processed_urls[url] = parsed_page
@@ -536,6 +586,10 @@ class AsyncCrawler:
             self._get_request_stats()
         )
 
+        retries_stats = (
+            self._retry_strategy.get_stats()
+        )
+
         crawler_logger.info(
             "Прогресс | "
             "обработано: %s | "
@@ -544,18 +598,20 @@ class AsyncCrawler:
             "robots blocked: %s | "
             "скорость: %.2f req/sec | "
             "средняя задержка: %.2f сек | "
-            "время: %.2f сек",
+            "время: %.2f сек | "
+            "retries: %s | "
+            "retries success: %s | "
+            "retries failed: %s",
             processed,
             queue_stats["queued"],
             failed,
             blocked,
-            request_stats[
-                "requests_per_second"
-            ],
-            request_stats[
-                "average_delay"
-            ],
+            request_stats["requests_per_second"],
+            request_stats["average_delay"],
             elapsed,
+            retries_stats["total_retries"],
+            retries_stats["successful_after_retry"],
+            retries_stats["failed_after_retries"],
         )
 
     def _is_allowed_url(

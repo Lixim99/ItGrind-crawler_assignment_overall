@@ -215,7 +215,10 @@ class AsyncCrawlerDay3Tests(unittest.IsolatedAsyncioTestCase):
     ) -> AsyncMock:
         failed_urls = failed_urls or set()
 
-        async def fetch(url: str) -> str:
+        async def fetch(
+            url: str,
+            timeout_multiplier: float = 1.0,
+        ) -> str:
             return "" if url in failed_urls else "<html>page</html>"
 
         async def parse(_html: str, url: str) -> dict[str, object]:

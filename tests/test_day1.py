@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import aiohttp
 
+from src.exception import NetworkError, PermanentError, TransientError
 from src.models import AsyncCrawler
 
 
@@ -77,7 +78,12 @@ class FakeSession:
         self.peak_requests = 0
         self.closed = False
 
-    def get(self, url: str) -> FakeRequestContextManager:
+    def get(
+        self,
+        url: str,
+        *,
+        timeout: aiohttp.ClientTimeout | None = None,
+    ) -> FakeRequestContextManager:
         return FakeRequestContextManager(self, url, self.routes[url])
 
     async def close(self) -> None:
@@ -98,7 +104,6 @@ class AsyncCrawlerTests(unittest.IsolatedAsyncioTestCase):
                 min_delay=0,
             )
 
-        crawler.MAX_ATTEMPTS = 1
         return crawler
 
     async def test_client_session_uses_connect_and_read_timeouts(self) -> None:
@@ -133,22 +138,22 @@ class AsyncCrawlerTests(unittest.IsolatedAsyncioTestCase):
         session = FakeSession({url: Route(status=404)})
         crawler = self.make_crawler(session)
 
-        with self.assertLogs("async_crawler", level="ERROR") as logs:
-            result = await crawler.fetch_url(url)
+        with self.assertRaises(PermanentError) as raised:
+            await crawler.fetch_url(url)
 
-        self.assertEqual(result, "")
-        self.assertIn(url, "\n".join(logs.output))
-        self.assertIn("404", "\n".join(logs.output))
+        self.assertEqual(raised.exception.status, 404)
 
     async def test_fetch_url_handles_timeout(self) -> None:
         url = "https://example.test/slow"
         session = FakeSession({url: Route(error=asyncio.TimeoutError())})
         crawler = self.make_crawler(session)
 
-        with self.assertLogs("async_crawler", level="ERROR") as logs:
-            result = await crawler.fetch_url(url)
+        with (
+            self.assertLogs("async_crawler", level="ERROR") as logs,
+            self.assertRaises(TransientError),
+        ):
+            await crawler.fetch_url(url)
 
-        self.assertEqual(result, "")
         self.assertIn(url, "\n".join(logs.output))
         self.assertIn("TimeoutError", "\n".join(logs.output))
 
@@ -158,10 +163,12 @@ class AsyncCrawlerTests(unittest.IsolatedAsyncioTestCase):
         session = FakeSession({url: Route(error=error)})
         crawler = self.make_crawler(session)
 
-        with self.assertLogs("async_crawler", level="ERROR") as logs:
-            result = await crawler.fetch_url(url)
+        with (
+            self.assertLogs("async_crawler", level="ERROR") as logs,
+            self.assertRaises(NetworkError),
+        ):
+            await crawler.fetch_url(url)
 
-        self.assertEqual(result, "")
         self.assertIn(url, "\n".join(logs.output))
         self.assertIn("ClientConnectionError", "\n".join(logs.output))
 

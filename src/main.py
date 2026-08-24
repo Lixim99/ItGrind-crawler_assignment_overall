@@ -1,7 +1,9 @@
 import asyncio
 from time import perf_counter
 
+from .exception import NetworkError, TransientError
 from .models import AsyncCrawler
+from .retry_strategy import RetryStrategy
 from .utils import setup_logging
 
 setup_logging()
@@ -14,7 +16,7 @@ async def main():
         # "https://example.com",
         # "https://httpbin.org/delay/1",
         # "https://httpbin.org/delay/2",
-        # "https://test.com",
+        "https://test.com",
         "https://apple.ru",
     ]
     try:
@@ -59,23 +61,45 @@ async def main():
         # print(f"Обработано {len(results)} страниц")
 
         # Day4
-        print("====Day 4====\n")
-        crawler3 = AsyncCrawler(
+        # print("====Day 4====\n")
+        # crawler3 = AsyncCrawler(
+        #     max_concurrent=5,
+        #     requests_per_second=2.0,  # 2 запроса в секунду
+        #     respect_robots=True,
+        #     min_delay=0.5,  # минимум 0.5 сек между запросами
+        #     user_agent="MyBot/1.0"
+        # )
+        # results = await crawler3.crawl(urls)
+        # print(results)
+        # print(crawler3.failed_urls)
+        # print(crawler3.visited_urls)
+
+        retry_strategy = RetryStrategy(
+            max_retries=3,
+            backoff_factor=2.0,
+            retry_on=[TransientError, NetworkError]
+        )
+
+        crawler4 = AsyncCrawler(
             max_concurrent=5,
             requests_per_second=2.0,  # 2 запроса в секунду
             respect_robots=True,
             min_delay=0.5,  # минимум 0.5 сек между запросами
-            user_agent="MyBot/1.0"
+            user_agent="MyBot/1.0",
+            retry_strategy=retry_strategy
         )
-        results = await crawler3.crawl(urls)
+
+        results = await crawler4.crawl(urls)
+
         print(results)
-        print(crawler3.failed_urls)
-        print(crawler3.visited_urls)
+        print(crawler4.failed_urls)
+        print(crawler4.visited_urls)
 
     finally:
         # await crawler.close()
         # await crawler2.close()
-        await crawler3.close()
+        # await crawler3.close()
+        await crawler4.close()
 
     # print(f"Загружено {len(results)} страниц")
 
