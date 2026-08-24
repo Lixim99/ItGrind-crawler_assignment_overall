@@ -7,8 +7,10 @@ from unittest.mock import AsyncMock, call, patch
 
 import aiohttp
 
+from src.exception import NetworkError
 from src.limiter import RateLimiter
 from src.models import AsyncCrawler
+from src.retry_strategy import RetryStrategy
 from src.robots import RobotsParser
 
 DOMAIN = "https://example.test"
@@ -57,7 +59,12 @@ class FakeSession:
         self.request_times: list[float] = []
         self.closed = False
 
-    def get(self, url: str) -> FakeResponse:
+    def get(
+        self,
+        url: str,
+        *,
+        timeout: aiohttp.ClientTimeout | None = None,
+    ) -> FakeResponse:
         self.requested_urls.append(url)
         self.request_times.append(perf_counter())
         return FakeResponse(self.routes[url])
@@ -226,16 +233,23 @@ class AsyncCrawlerDay4Tests(unittest.IsolatedAsyncioTestCase):
         crawler = self.make_crawler(session)
         crawler._wait_before_request = AsyncMock()
         self.addAsyncCleanup(crawler.close)
+        strategy = RetryStrategy(
+            max_retries=2,
+            retry_on=[NetworkError],
+        )
 
         with (
-            patch("src.models.asyncio.sleep", new=AsyncMock()) as sleep,
+            patch(
+                "src.retry_strategy.asyncio.sleep",
+                new=AsyncMock(),
+            ) as sleep,
             self.assertLogs("async_crawler", level="INFO"),
+            self.assertRaises(NetworkError),
         ):
-            result = await crawler.fetch_url(url)
+            await strategy.execute_with_retry(crawler.fetch_url, url)
 
-        self.assertEqual(result, "")
         self.assertEqual(session.requested_urls, [url, url, url])
-        self.assertEqual(sleep.await_args_list, [call(1), call(2)])
+        self.assertEqual(sleep.await_args_list, [call(1.0), call(2.0)])
 
     async def test_crawl_blocks_disallowed_url_and_tracks_it(self) -> None:
         robots = """
