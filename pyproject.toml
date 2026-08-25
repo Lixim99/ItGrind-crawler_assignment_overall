@@ -7,6 +7,8 @@ dependencies = [
     "aiofiles",
     "beautifulsoup4",
     "lxml",
+    "asyncpg",
+    "python-dotenv"
 ]
 
 [tool.ruff]

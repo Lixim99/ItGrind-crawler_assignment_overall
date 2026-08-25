@@ -28,6 +28,7 @@ class Route:
 class FakeResponse:
     def __init__(self, route: Route) -> None:
         self.status = route.status
+        self.content_type = "text/html"
         self._route = route
 
     async def __aenter__(self) -> FakeResponse:
