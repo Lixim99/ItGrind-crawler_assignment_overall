@@ -23,6 +23,10 @@ class PermanentError(Exception):
         self.status = status
 
 
+class StorageError(Exception):
+    ...
+
+
 class NetworkError(Exception):
     ...
 

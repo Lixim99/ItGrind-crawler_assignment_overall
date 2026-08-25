@@ -24,6 +24,7 @@ class FakeResponse:
     def __init__(self, url: str, route: Route) -> None:
         self.url = url
         self.status = route.status
+        self.content_type = "text/html"
         self._body = route.body
 
     def raise_for_status(self) -> None:

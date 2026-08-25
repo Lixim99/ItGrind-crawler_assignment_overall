@@ -29,6 +29,7 @@ class Outcome:
 class FakeResponse:
     def __init__(self, outcome: Outcome) -> None:
         self.status = outcome.status
+        self.content_type = "text/html"
         self._body = outcome.body
         self._error = outcome.error
 

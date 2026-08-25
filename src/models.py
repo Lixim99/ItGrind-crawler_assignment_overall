@@ -2,6 +2,7 @@ import asyncio
 import random
 import re
 from collections import deque
+from datetime import datetime
 from time import perf_counter
 from urllib.parse import urlparse
 
@@ -20,6 +21,7 @@ from .queue import CrawlerQueue
 from .retry_strategy import RetryStrategy
 from .robots import RobotsParser
 from .semaphore import SemaphoreManager
+from .storage import DataStorage
 from .utils import crawler_logger, normalize_url
 
 
@@ -48,7 +50,8 @@ class AsyncCrawler:
         connect_timeout: float = 5.0,
         read_timeout: float = 10.0,
         total_timeout: float = 30.0,
-        retry_strategy: RetryStrategy | None = None
+        retry_strategy: RetryStrategy | None = None,
+        storage: DataStorage | None = None
     ) -> None:
         if requests_per_second <= 0:
             raise ValueError(
@@ -74,6 +77,7 @@ class AsyncCrawler:
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
         self._total_timeout = total_timeout
+        self._storage = storage
 
         self._session = aiohttp.ClientSession(
             timeout=timeout,
@@ -122,6 +126,7 @@ class AsyncCrawler:
         self._request_timestamps = deque()
         self._request_delays: list[float] = []
         self._last_request_started: float | None = None
+        self._response_info: dict[str, dict] = {}
 
         self._retry_strategy = retry_strategy or RetryStrategy(
             max_retries=3,
@@ -219,7 +224,7 @@ class AsyncCrawler:
 
         # Jitter.
         # Отдельного параметра jitter в ТЗ нет,
-        # поэтому используем случайную задержку
+        # поэтому использую случайную задержку
         # в диапазоне 0..min_delay.
         if self._min_delay > 0:
             await asyncio.sleep(
@@ -336,6 +341,11 @@ class AsyncCrawler:
                     len(content),
                 )
 
+                self._response_info[url] = {
+                    "status_code": response.status,
+                    "content_type": response.content_type,
+                }
+
                 return content
 
         except TimeoutError as error:
@@ -383,6 +393,9 @@ class AsyncCrawler:
 
     async def close(self) -> None:
         await self._session.close()
+
+        if self._storage:
+            await self._storage.close()
 
     async def fetch_and_parse(self, url: str) -> dict:
         page_html = await self.fetch_url(url)
@@ -508,6 +521,27 @@ class AsyncCrawler:
                     raise ParseError(
                         f"Parse error: {url}"
                     ) from error
+
+                try:
+                    if self._storage:
+                        await self._storage.save({
+                            "url": url,
+                            "title": parsed_page["title"],
+                            "text": parsed_page["text"],
+                            "links": parsed_page["links"],
+                            "metadata": parsed_page["metadata"],
+                            "crawled_at": datetime.now(),
+                            "status_code": self._response_info[url]["status_code"],
+                            "content_type": self._response_info[url]["content_type"],
+                        })
+                except Exception as error:
+                    crawler_logger.error(
+                        "Ошибка сохранения | URL: %s | "
+                        "тип: %s | сообщение: %s",
+                        url,
+                        type(error).__name__,
+                        error,
+                    )
 
                 if depth < self._max_depth:
                     for link in parsed_page.get("links", []):

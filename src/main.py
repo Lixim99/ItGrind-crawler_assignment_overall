@@ -1,10 +1,15 @@
 import asyncio
 from time import perf_counter
 
+from dotenv import load_dotenv
+
 from .exception import NetworkError, TransientError
 from .models import AsyncCrawler
 from .retry_strategy import RetryStrategy
+from .storage import CSVStorage, JSONStorage, PostgreSQLStorage
 from .utils import setup_logging
+
+load_dotenv()
 
 setup_logging()
 
@@ -74,33 +79,146 @@ async def main():
         # print(crawler3.failed_urls)
         # print(crawler3.visited_urls)
 
-        retry_strategy = RetryStrategy(
-            max_retries=3,
-            backoff_factor=2.0,
-            retry_on=[TransientError, NetworkError]
-        )
+        # Day5
+        # print("====Day 5====\n")
+        # retry_strategy = RetryStrategy(
+        #     max_retries=3,
+        #     backoff_factor=2.0,
+        #     retry_on=[TransientError, NetworkError]
+        # )
 
-        crawler4 = AsyncCrawler(
-            max_concurrent=5,
-            requests_per_second=2.0,  # 2 запроса в секунду
-            respect_robots=True,
-            min_delay=0.5,  # минимум 0.5 сек между запросами
-            user_agent="MyBot/1.0",
-            retry_strategy=retry_strategy
-        )
+        # crawler4 = AsyncCrawler(
+        #     max_concurrent=5,
+        #     requests_per_second=2.0,  # 2 запроса в секунду
+        #     respect_robots=True,
+        #     min_delay=0.5,  # минимум 0.5 сек между запросами
+        #     user_agent="MyBot/1.0",
+        #     retry_strategy=retry_strategy
+        # )
 
-        results = await crawler4.crawl(urls)
+        # results = await crawler4.crawl(urls)
 
-        print(results)
-        print(crawler4.failed_urls)
-        print(crawler4.visited_urls)
+        # print(results)
+        # print(crawler4.failed_urls)
+        # print(crawler4.visited_urls)
+
+        # Day6
+        # print("====Day 6====\n")
+        # db_storage = PostgreSQLStorage("crawler.db")
+
+        json_storage = JSONStorage("crawl.json")
+        await json_storage.save({"url": "test", "text": "testText"})
+
+        # crawler5 = AsyncCrawler(
+        #     max_concurrent=5,
+        #     requests_per_second=2.0,  # 2 запроса в секунду
+        #     respect_robots=True,
+        #     min_delay=0.5,  # минимум 0.5 сек между запросами
+        #     user_agent="MyBot/1.0",
+        #     storage=json_storage
+        # )
+
+        # results = await crawler5.crawl(urls)
 
     finally:
+
         # await crawler.close()
         # await crawler2.close()
         # await crawler3.close()
-        await crawler4.close()
+        # await crawler4.close()
+        # await crawler5.close()
 
-    # print(f"Загружено {len(results)} страниц")
+        # print(f"Загружено {len(results)} страниц")
+        print(f"Загружено {len('here')} страниц")
 
-asyncio.run(main())
+
+async def main2():
+    print("=== Day6 JSON===\n")
+    storage = JSONStorage(
+        "crawler.jsonl"
+    )
+
+    crawler = AsyncCrawler(
+        storage=storage,
+    )
+
+    try:
+        await crawler.crawl(
+            start_urls=[
+                "https://example.com"
+            ],
+            max_pages=10,
+        )
+    finally:
+        await crawler.close()
+
+    async for page in storage.read():
+        print(
+            page["url"],
+            page["title"]
+        )
+
+    print(storage.get_stats())
+
+    print("=== Day6 CSV===\n")
+    storage = CSVStorage(
+        "crawler.csv"
+    )
+
+    crawler = AsyncCrawler(
+        storage=storage,
+    )
+
+    try:
+        await crawler.crawl(
+            start_urls=[
+                "https://example.com"
+            ],
+            max_pages=10,
+        )
+    finally:
+        await crawler.close()
+
+    pages = await storage.read()
+
+    for page in pages:
+        print(
+            page["url"],
+            page["title"],
+        )
+
+    print(storage.get_stats())
+
+    print("=== Day6 DB===\n")
+    storage = PostgreSQLStorage(
+        database="crawler"
+    )
+
+    crawler = AsyncCrawler(
+        storage=storage,
+    )
+
+    try:
+        await crawler.crawl(
+            start_urls=[
+                "https://example.com"
+            ],
+            max_pages=10,
+        )
+    finally:
+        await crawler.close()
+
+    pages = await storage.read()
+
+    for page in pages:
+        print(
+            page["url"],
+            page["title"],
+        )
+
+    print(storage.get_stats())
+
+    await storage.close()
+
+# asyncio.run(main())
+asyncio.run(main2())
