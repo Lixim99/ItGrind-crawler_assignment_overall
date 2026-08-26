@@ -86,8 +86,8 @@ python -m src.main \
   --max-depth 2 \
   --rate-limit 2 \
   --respect-robots \
-  --output reports/stats.json \
-  --html-report reports/report.html
+  --output stats.json \
+  --html-report report.html
 ```
 
 Поддерживаемые параметры:
@@ -97,8 +97,8 @@ python -m src.main \
 | `--urls URL [URL ...]` | Стартовые URL |
 | `--max-pages N` | Максимальное количество страниц |
 | `--max-depth N` | Максимальная глубина обхода |
-| `--output FILE` | JSON-файл со статистикой |
-| `--html-report FILE` | HTML-отчёт |
+| `--output FILE` | JSON-файл со статистикой в `public/uploads/` |
+| `--html-report FILE` | HTML-отчёт в `public/uploads/` |
 | `--config FILE` | JSON-конфигурация, по умолчанию `config.json` |
 | `--respect-robots` | Включить соблюдение `robots.txt` |
 | `--rate-limit RPS` | Максимальная частота запросов |
@@ -239,8 +239,8 @@ async def main() -> None:
 
     try:
         await crawler.crawl()
-        crawler.export_to_json("reports/stats.json")
-        crawler.export_to_html_report("reports/report.html")
+        crawler.export_to_json("stats.json")
+        crawler.export_to_html_report("report.html")
     finally:
         await crawler.close()
 
@@ -303,7 +303,7 @@ retry_strategy = RetryStrategy(
 }
 ```
 
-Файловые хранилища создаются внутри `public/uploads/`. Ошибка записи логируется и не останавливает обработку остальных страниц.
+Файловые хранилища, конфигурации демонстраций и отчёты создаются внутри `public/uploads/` через общую константу `GLOBAL_UPLOAD_PATH`. Ошибка записи логируется и не останавливает обработку остальных страниц.
 
 ## Логирование и отчёты
 

@@ -58,7 +58,7 @@ class RobotsParser:
 
                 else:
                     # 5xx — временная проблема сервера.
-                    # Для вежливого crawler запрещаем обход.
+                    # Для crawler запрещаем обход.
                     self._parser.parse([
                         "User-agent: *",
                         "Disallow: /",

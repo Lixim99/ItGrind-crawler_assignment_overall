@@ -57,7 +57,7 @@ class TemporaryStorageTestCase(unittest.IsolatedAsyncioTestCase):
 
         upload_path = Path(self._temporary_directory.name)
         self._path_patch = patch(
-            "src.storage.GLOBAL_UPLOAD_PATH",
+            "src.constants.GLOBAL_UPLOAD_PATH",
             upload_path,
         )
         self._path_patch.start()
@@ -67,7 +67,7 @@ class TemporaryStorageTestCase(unittest.IsolatedAsyncioTestCase):
 class DataStorageTests(unittest.TestCase):
     def test_base_storage_is_abstract(self) -> None:
         with self.assertRaises(TypeError):
-            DataStorage()  # type: ignore[abstract]
+            DataStorage()
 
 
 class JSONStorageTests(TemporaryStorageTestCase):
@@ -372,7 +372,7 @@ class AsyncCrawlerStorageTests(unittest.IsolatedAsyncioTestCase):
         crawler, _session = self.make_crawler(storage)
         self.addAsyncCleanup(crawler.close)
 
-        with self.assertLogs("async_crawler", level="ERROR") as logs:
+        with self.assertLogs("crawler", level="ERROR") as logs:
             results = await crawler.crawl([URL], max_pages=1)
 
         self.assertIn(URL, results)

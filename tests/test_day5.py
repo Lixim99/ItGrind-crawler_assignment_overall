@@ -230,7 +230,7 @@ class AsyncCrawlerRetryTests(unittest.IsolatedAsyncioTestCase):
                 "src.retry_strategy.asyncio.sleep",
                 new=AsyncMock(),
             ) as sleep,
-            self.assertLogs("async_crawler", level="INFO"),
+            self.assertLogs("crawler", level="INFO"),
         ):
             results = await crawler.crawl([URL], max_pages=1)
 
