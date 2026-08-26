@@ -30,7 +30,7 @@ class FakeResponse:
     def raise_for_status(self) -> None:
         if self.status >= 400:
             raise aiohttp.ClientResponseError(
-                request_info=None,  # type: ignore[arg-type]
+                request_info=None,
                 history=(),
                 status=self.status,
                 message="HTTP error",
@@ -127,7 +127,7 @@ class AsyncCrawlerTests(unittest.IsolatedAsyncioTestCase):
         session = FakeSession({url: Route(body=body)})
         crawler = self.make_crawler(session)
 
-        with self.assertLogs("async_crawler", level="INFO") as logs:
+        with self.assertLogs("crawler", level="INFO") as logs:
             result = await crawler.fetch_url(url)
 
         self.assertEqual(result, body)
@@ -150,7 +150,7 @@ class AsyncCrawlerTests(unittest.IsolatedAsyncioTestCase):
         crawler = self.make_crawler(session)
 
         with (
-            self.assertLogs("async_crawler", level="ERROR") as logs,
+            self.assertLogs("crawler", level="ERROR") as logs,
             self.assertRaises(TransientError),
         ):
             await crawler.fetch_url(url)
@@ -165,7 +165,7 @@ class AsyncCrawlerTests(unittest.IsolatedAsyncioTestCase):
         crawler = self.make_crawler(session)
 
         with (
-            self.assertLogs("async_crawler", level="ERROR") as logs,
+            self.assertLogs("crawler", level="ERROR") as logs,
             self.assertRaises(NetworkError),
         ):
             await crawler.fetch_url(url)
@@ -182,7 +182,7 @@ class AsyncCrawlerTests(unittest.IsolatedAsyncioTestCase):
         session = FakeSession(routes)
         crawler = self.make_crawler(session, max_concurrent=2)
 
-        with self.assertLogs("async_crawler", level="INFO"):
+        with self.assertLogs("crawler", level="INFO"):
             results = await crawler.fetch_urls(urls)
 
         self.assertEqual(
@@ -190,6 +190,30 @@ class AsyncCrawlerTests(unittest.IsolatedAsyncioTestCase):
             {url: f"page-{number}" for number, url in enumerate(urls)},
         )
         self.assertEqual(session.peak_requests, 2)
+
+    async def test_fetch_urls_keeps_successes_when_some_requests_fail(
+        self,
+    ) -> None:
+        success_url = "https://example.test/valid"
+        missing_url = "https://example.test/missing"
+        timeout_url = "https://example.test/slow"
+        session = FakeSession({
+            success_url: Route(body="valid page"),
+            missing_url: Route(status=404),
+            timeout_url: Route(error=asyncio.TimeoutError()),
+        })
+        crawler = self.make_crawler(session, max_concurrent=3)
+
+        with self.assertLogs("crawler", level="ERROR") as logs:
+            results = await crawler.fetch_urls([
+                success_url,
+                missing_url,
+                timeout_url,
+            ])
+
+        self.assertEqual(results, {success_url: "valid page"})
+        self.assertIn(missing_url, "\n".join(logs.output))
+        self.assertIn(timeout_url, "\n".join(logs.output))
 
     async def test_sequential_fetch_returns_mapping(self) -> None:
         urls = [f"https://example.test/{number}" for number in range(2)]
@@ -200,7 +224,7 @@ class AsyncCrawlerTests(unittest.IsolatedAsyncioTestCase):
         session = FakeSession(routes)
         crawler = self.make_crawler(session)
 
-        with self.assertLogs("async_crawler", level="INFO"):
+        with self.assertLogs("crawler", level="INFO"):
             results = await crawler.fetch_urls_sequentially(urls)
 
         self.assertEqual(
@@ -214,7 +238,7 @@ class AsyncCrawlerTests(unittest.IsolatedAsyncioTestCase):
         session = FakeSession(routes)
         crawler = self.make_crawler(session, max_concurrent=4)
 
-        with self.assertLogs("async_crawler", level="INFO"):
+        with self.assertLogs("crawler", level="INFO"):
             started = perf_counter()
             await crawler.fetch_urls_sequentially(urls)
             sequential_time = perf_counter() - started

@@ -5,8 +5,6 @@ from .utils import crawler_logger
 
 
 class RetryStrategy:
-    # Настраиваемые типы ошибок для повтора
-    # Экспоненциальный backoff между попытками
     def __init__(
         self,
         max_retries: int = 3,

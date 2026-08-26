@@ -1,9 +1,8 @@
 import asyncio
-from urllib.parse import urldefrag, urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
-from .utils import crawler_logger
+from .utils import crawler_logger, normalize_url
 
 
 class HTMLParser:
@@ -136,22 +135,7 @@ class HTMLParser:
 
     @staticmethod
     def _normalize_url(value: str, base_url: str) -> str | None:
-        value = value.strip()
-
-        if not value or value.startswith("#"):
-            return None
-
-        absolute_url = urljoin(base_url, value)
-        absolute_url, _ = urldefrag(absolute_url)
-        parsed = urlparse(absolute_url)
-
-        if parsed.scheme not in {"http", "https"}:
-            return None
-
-        if not parsed.netloc:
-            return
-
-        return absolute_url
+        return normalize_url(value, base_url)
 
     def extract_links(
         self,

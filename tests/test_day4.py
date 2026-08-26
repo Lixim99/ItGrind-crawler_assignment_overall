@@ -46,7 +46,7 @@ class FakeResponse:
     def raise_for_status(self) -> None:
         if self.status >= 400:
             raise aiohttp.ClientResponseError(
-                request_info=None,  # type: ignore[arg-type]
+                request_info=None,
                 history=(),
                 status=self.status,
                 message="HTTP error",
@@ -117,7 +117,7 @@ class RobotsParserTests(unittest.IsolatedAsyncioTestCase):
         Allow: /
         """
         session = FakeSession({ROBOTS_URL: Route(body=robots)})
-        parser = RobotsParser(session)  # type: ignore[arg-type]
+        parser = RobotsParser(session)
 
         first = await parser.fetch_robots(f"{DOMAIN}/page")
         second = await parser.fetch_robots(f"{DOMAIN}/other")
@@ -147,7 +147,7 @@ class AsyncCrawlerDay4Tests(unittest.IsolatedAsyncioTestCase):
             "src.models.aiohttp.ClientSession",
             return_value=session,
         ):
-            return AsyncCrawler(**options)  # type: ignore[arg-type]
+            return AsyncCrawler(**options)
 
     async def test_custom_user_agent_is_used_by_session(self) -> None:
         session = FakeSession({})
@@ -187,7 +187,7 @@ class AsyncCrawlerDay4Tests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("src.models.random.uniform", return_value=0),
-            self.assertLogs("async_crawler", level="INFO"),
+            self.assertLogs("crawler", level="INFO"),
         ):
             await crawler.fetch_url(first_url)
             await crawler.fetch_url(second_url)
@@ -244,7 +244,7 @@ class AsyncCrawlerDay4Tests(unittest.IsolatedAsyncioTestCase):
                 "src.retry_strategy.asyncio.sleep",
                 new=AsyncMock(),
             ) as sleep,
-            self.assertLogs("async_crawler", level="INFO"),
+            self.assertLogs("crawler", level="INFO"),
             self.assertRaises(NetworkError),
         ):
             await strategy.execute_with_retry(crawler.fetch_url, url)
@@ -265,12 +265,12 @@ class AsyncCrawlerDay4Tests(unittest.IsolatedAsyncioTestCase):
         )
         self.addAsyncCleanup(crawler.close)
 
-        with self.assertLogs("async_crawler", level="INFO") as logs:
+        with self.assertLogs("crawler", level="INFO") as logs:
             results = await crawler.crawl([PRIVATE_URL], max_pages=1)
 
         self.assertEqual(results, {})
         self.assertEqual(crawler.failed_urls, {})
-        self.assertEqual(crawler._get_request_stats()["robots_blocked"], 1)
+        self.assertEqual(crawler.get_request_stats()["robots_blocked"], 1)
         self.assertEqual(session.requested_urls, [ROBOTS_URL])
         self.assertIn("robots blocked: 1", "\n".join(logs.output))
 
@@ -287,7 +287,7 @@ class AsyncCrawlerDay4Tests(unittest.IsolatedAsyncioTestCase):
             crawler._record_request_start()
             crawler._record_request_start()
 
-        stats = crawler._get_request_stats()
+        stats = crawler.get_request_stats()
 
         self.assertEqual(stats["requests_per_second"], 2)
         self.assertEqual(stats["average_delay"], 0.25)

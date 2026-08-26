@@ -4,12 +4,11 @@ import io
 import json
 import os
 from abc import ABC, abstractmethod
-from pathlib import Path
 
 import aiofiles
 import asyncpg
 
-from .constants import GLOBAL_UPLOAD_PATH
+from .constants import get_upload_path
 from .exception import StorageError
 
 
@@ -25,11 +24,7 @@ class DataStorage(ABC):
 
 class JSONStorage(DataStorage):
     def __init__(self, file: str):
-        self._full_path = (
-            Path.cwd()
-            / GLOBAL_UPLOAD_PATH
-            / file
-        )
+        self._full_path = get_upload_path(file)
 
         self._full_path.parent.mkdir(
             parents=True,
@@ -129,11 +124,7 @@ class CSVStorage(DataStorage):
         file: str,
         encoding: str = "utf-8",
     ):
-        self._full_path = (
-            Path.cwd()
-            / GLOBAL_UPLOAD_PATH
-            / file
-        )
+        self._full_path = get_upload_path(file)
 
         self._full_path.parent.mkdir(
             parents=True,

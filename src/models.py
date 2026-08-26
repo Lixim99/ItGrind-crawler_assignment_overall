@@ -21,6 +21,8 @@ from .queue import CrawlerQueue
 from .retry_strategy import RetryStrategy
 from .robots import RobotsParser
 from .semaphore import SemaphoreManager
+from .sitemap import SitemapParser
+from .stats import CrawlerStats
 from .storage import DataStorage
 from .utils import crawler_logger, normalize_url
 
@@ -42,6 +44,7 @@ class AsyncCrawler:
         self,
         *,
         max_concurrent: int = 10,
+        max_concurrent_per_domain: int = 3,
         max_depth: int = 2,
         requests_per_second: float = 2.0,
         respect_robots: bool = False,
@@ -53,6 +56,16 @@ class AsyncCrawler:
         retry_strategy: RetryStrategy | None = None,
         storage: DataStorage | None = None
     ) -> None:
+        if max_concurrent <= 0:
+            raise ValueError(
+                "max_concurrent must be greater than 0"
+            )
+
+        if max_concurrent_per_domain <= 0:
+            raise ValueError(
+                "max_concurrent_per_domain must be greater than 0"
+            )
+
         if requests_per_second <= 0:
             raise ValueError(
                 "requests_per_second must be greater than 0"
@@ -88,6 +101,7 @@ class AsyncCrawler:
 
         self._semaphore = SemaphoreManager(
             max_tasks=max_concurrent,
+            max_tasks_per_domain=max_concurrent_per_domain,
         )
 
         rate_delay = 1 / requests_per_second
@@ -109,6 +123,7 @@ class AsyncCrawler:
         self._processed_urls = {}
         self._url_depths = {}
         self._blocked_urls: set[str] = set()
+        self._stats = CrawlerStats()
 
         # Один RobotsParser на один домен.
         self._robots_parsers: dict[
@@ -127,6 +142,7 @@ class AsyncCrawler:
         self._request_delays: list[float] = []
         self._last_request_started: float | None = None
         self._response_info: dict[str, dict] = {}
+        self._active_tasks = 0
 
         self._retry_strategy = retry_strategy or RetryStrategy(
             max_retries=3,
@@ -295,6 +311,9 @@ class AsyncCrawler:
             ),
         }
 
+    def get_request_stats(self) -> dict:
+        return self._get_request_stats()
+
     async def fetch_url(
         self,
         url: str,
@@ -387,9 +406,28 @@ class AsyncCrawler:
     async def fetch_urls(self, urls: list[str]) -> dict[str, str]:
         responses = await asyncio.gather(
             *(self.fetch_url(url) for url in urls),
+            return_exceptions=True,
         )
 
-        return dict(zip(urls, responses, strict=True))
+        results = {}
+
+        for url, response in zip(
+            urls,
+            responses,
+            strict=True,
+        ):
+            if isinstance(response, Exception):
+                crawler_logger.error(
+                    "Не удалось загрузить %s | %s",
+                    url,
+                    response,
+                )
+
+                continue
+
+            results[url] = response
+
+        return results
 
     async def close(self) -> None:
         await self._session.close()
@@ -409,7 +447,13 @@ class AsyncCrawler:
         same_domain_only: bool = True,
         include_patterns: list[str] | None = None,
         exclude_patterns: list[str] | None = None,
+        sitemap_urls: list[str] | None = None
     ) -> dict:
+        started = perf_counter()
+
+        self._stats = CrawlerStats()
+        self._stats.start()
+
         self._queue = CrawlerQueue()
 
         self._visited_urls.clear()
@@ -420,36 +464,64 @@ class AsyncCrawler:
         self._request_delays.clear()
         self._blocked_urls.clear()
         self._last_request_started = None
+        self._active_tasks = 0
 
         include_patterns = include_patterns or []
         exclude_patterns = exclude_patterns or []
 
-        allowed_domains = {
-            urlparse(url).netloc
-            for url in start_urls
-        }
+        allowed_domains = set()
+        seed_urls = list(start_urls)
 
-        for url in start_urls:
+        if sitemap_urls:
+            sitemap_parser = SitemapParser(
+                self._session
+            )
+
+            for sitemap_url in sitemap_urls:
+                sitemap_pages = await sitemap_parser.fetch_sitemap(
+                    sitemap_url
+                )
+
+                seed_urls.extend(
+                    sitemap_pages
+                )
+
+        for url in seed_urls:
+            if len(self._visited_urls) >= max_pages:
+                break
+
             # поправить 2 параметр
-            url = normalize_url(
+            normalized_url = normalize_url(
                 value=url,
                 base_url=url,
             )
 
-            if url is None:
+            if normalized_url is None:
                 continue
 
-            if len(self._visited_urls) >= max_pages:
-                break
-
-            if url in self._visited_urls:
+            if normalized_url in self._visited_urls:
                 continue
 
-            self._visited_urls.add(url)
-            self._url_depths[url] = 0
-            self._queue.add_url(url, priority=0)
+            allowed_domains.add(
+                urlparse(normalized_url).netloc
+            )
 
-        started = perf_counter()
+            self._visited_urls.add(
+                normalized_url
+            )
+
+            self._url_depths[
+                normalized_url
+            ] = 0
+
+            self._queue.add_url(
+                normalized_url,
+                priority=0,
+            )
+
+        if not self._visited_urls:
+            self._stats.finish()
+            return {}
 
         workers = [
             asyncio.create_task(
@@ -473,6 +545,8 @@ class AsyncCrawler:
 
             await asyncio.gather(*workers, return_exceptions=True)
 
+            self._stats.finish()
+
         return dict(self._processed_urls)
 
     async def _worker(
@@ -488,6 +562,8 @@ class AsyncCrawler:
         while True:
             url = await self._queue.get_next()
             depth = self._url_depths[url]
+
+            self._active_tasks += 1
 
             attempt = 0
 
@@ -583,18 +659,58 @@ class AsyncCrawler:
                     "message": str(error),
                 }
 
+                status_code = getattr(
+                    error,
+                    "status",
+                    None,
+                )
+
+                self._stats.record_failure(
+                    url=url,
+                    status_code=status_code,
+                )
+
                 self._queue.mark_failed(url, error=str(error))
             else:
                 self._processed_urls[url] = parsed_page
+
+                self._stats.record_success(
+                    url=url,
+                    status_code=self._response_info[url][
+                        "status_code"
+                    ],
+                )
+
                 self._queue.mark_processed(url)
             finally:
+                self._active_tasks -= 1
+
                 self._log_progress(
-                    started
+                    started,
+                    max_pages
                 )
+
+    def get_stats(self) -> dict:
+        return self._stats.get_stats()
+
+    def export_to_json(
+        self,
+        filename: str,
+    ) -> None:
+        self._stats.export_to_json(
+            filename
+        )
+
+    def export_to_html_report(
+        self,
+        filename: str
+    ) -> None:
+        self._stats.export_to_html_report(filename)
 
     def _log_progress(
         self,
         started: float,
+        max_pages: int,
     ) -> None:
         processed = len(
             self._processed_urls
@@ -608,8 +724,21 @@ class AsyncCrawler:
             self._blocked_urls
         )
 
+        completed = (
+            processed
+            + failed
+            + blocked
+        )
+
         elapsed = (
-            perf_counter() - started
+            perf_counter()
+            - started
+        )
+
+        pages_per_second = (
+            completed / elapsed
+            if elapsed > 0
+            else 0.0
         )
 
         queue_stats = (
@@ -624,24 +753,65 @@ class AsyncCrawler:
             self._retry_strategy.get_stats()
         )
 
+        known_remaining = (
+            queue_stats["queued"]
+            + self._active_tasks
+        )
+
+        is_finished = (
+            queue_stats["queued"] == 0
+            and self._active_tasks == 0
+        )
+
+        if is_finished:
+            progress = 100.0
+            eta = 0.0
+        else:
+            progress = min(
+                completed / max_pages * 100,
+                100.0,
+            )
+
+            eta = (
+                known_remaining / pages_per_second
+                if pages_per_second > 0
+                else None
+            )
+
         crawler_logger.info(
             "Прогресс | "
+            "%.1f%% | "
             "обработано: %s | "
-            "очередь: %s | "
+            "лимит: %s | "
+            "успешно: %s | "
             "ошибок: %s | "
             "robots blocked: %s | "
-            "скорость: %.2f req/sec | "
+            "очередь: %s | "
+            "active: %s | "
+            "скорость обработки: %.2f pages/sec | "
+            "скорость запросов: %.2f req/sec | "
             "средняя задержка: %.2f сек | "
+            "ETA текущей очереди: %s | "
             "время: %.2f сек | "
             "retries: %s | "
             "retries success: %s | "
             "retries failed: %s",
+            progress,
+            completed,
+            max_pages,
             processed,
-            queue_stats["queued"],
             failed,
             blocked,
+            queue_stats["queued"],
+            self._active_tasks,
+            pages_per_second,
             request_stats["requests_per_second"],
             request_stats["average_delay"],
+            (
+                f"{eta:.2f} сек"
+                if eta is not None
+                else "N/A"
+            ),
             elapsed,
             retries_stats["total_retries"],
             retries_stats["successful_after_retry"],

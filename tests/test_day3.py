@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 from src.models import AsyncCrawler
 from src.queue import CrawlerQueue
 from src.semaphore import SemaphoreManager
+from src.utils import normalize_url
 
 
 ROOT_URL = "https://example.test/"
@@ -164,6 +165,7 @@ class AsyncCrawlerDay3Tests(unittest.IsolatedAsyncioTestCase):
         self,
         *,
         max_concurrent: int = 3,
+        max_concurrent_per_domain: int = 3,
         max_depth: int = 2,
     ) -> AsyncCrawler:
         session = AsyncMock()
@@ -174,6 +176,7 @@ class AsyncCrawlerDay3Tests(unittest.IsolatedAsyncioTestCase):
         ):
             crawler = AsyncCrawler(
                 max_concurrent=max_concurrent,
+                max_concurrent_per_domain=max_concurrent_per_domain,
                 max_depth=max_depth,
             )
 
@@ -206,6 +209,31 @@ class AsyncCrawlerDay3Tests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(peak, 2)
 
+    async def test_crawler_uses_configured_per_domain_limit(self) -> None:
+        crawler = self.make_crawler(
+            max_concurrent=5,
+            max_concurrent_per_domain=2,
+        )
+        active = 0
+        peak = 0
+
+        async def task(number: int) -> None:
+            nonlocal active, peak
+            url = f"https://example.test/page-{number}"
+            await crawler._semaphore.acquire(url)
+
+            try:
+                active += 1
+                peak = max(peak, active)
+                await asyncio.sleep(0.02)
+            finally:
+                active -= 1
+                crawler._semaphore.release(url)
+
+        await asyncio.gather(*(task(number) for number in range(5)))
+
+        self.assertEqual(peak, 2)
+
     @staticmethod
     def install_graph(
         crawler: AsyncCrawler,
@@ -219,7 +247,14 @@ class AsyncCrawlerDay3Tests(unittest.IsolatedAsyncioTestCase):
             url: str,
             timeout_multiplier: float = 1.0,
         ) -> str:
-            return "" if url in failed_urls else "<html>page</html>"
+            if url in failed_urls:
+                return ""
+
+            crawler._response_info[url] = {
+                "status_code": 200,
+                "content_type": "text/html",
+            }
+            return "<html>page</html>"
 
         async def parse(_html: str, url: str) -> dict[str, object]:
             return parsed_page(url, graph.get(url, []))
@@ -317,6 +352,29 @@ class AsyncCrawlerDay3Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(crawler.visited_urls, {ROOT_URL, child_url})
         self.assertEqual(fetch_mock.await_count, 2)
 
+    async def test_origin_with_and_without_slash_is_one_url(self) -> None:
+        crawler = self.make_crawler(max_depth=1)
+        origin_without_slash = "https://example.test"
+        graph = {
+            ROOT_URL: [origin_without_slash, ROOT_URL],
+        }
+        fetch_mock = self.install_graph(crawler, graph)
+
+        results = await crawler.crawl([origin_without_slash])
+
+        self.assertEqual(set(results), {ROOT_URL})
+        self.assertEqual(crawler.visited_urls, {ROOT_URL})
+        self.assertEqual(fetch_mock.await_count, 1)
+
+    def test_normalize_url_canonicalizes_empty_path(self) -> None:
+        self.assertEqual(
+            normalize_url(
+                "https://example.test",
+                "https://example.test",
+            ),
+            ROOT_URL,
+        )
+
     async def test_crawl_respects_max_pages(self) -> None:
         crawler = self.make_crawler(max_depth=1)
         graph = {
@@ -338,7 +396,7 @@ class AsyncCrawlerDay3Tests(unittest.IsolatedAsyncioTestCase):
         graph = {ROOT_URL: [failed_url]}
         self.install_graph(crawler, graph, failed_urls={failed_url})
 
-        with self.assertLogs("async_crawler", level="INFO") as logs:
+        with self.assertLogs("crawler", level="INFO") as logs:
             results = await crawler.crawl([ROOT_URL])
 
         self.assertEqual(set(results), {ROOT_URL})

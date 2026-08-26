@@ -83,7 +83,7 @@ class HTMLParserTests(unittest.IsolatedAsyncioTestCase):
     async def test_empty_html_returns_complete_empty_result(self) -> None:
         parser = HTMLParser()
 
-        with self.assertLogs("async_crawler", level="WARNING") as logs:
+        with self.assertLogs("crawler", level="WARNING") as logs:
             result = await parser.parse_html("", BASE_URL)
 
         self.assertEqual(
@@ -132,6 +132,17 @@ class HTMLParserTests(unittest.IsolatedAsyncioTestCase):
                 "https://external.test/path",
             ],
         )
+
+    async def test_origin_url_gets_canonical_trailing_slash(self) -> None:
+        parser = HTMLParser()
+        soup = BeautifulSoup(
+            '<a href="https://external.test">External</a>',
+            "html.parser",
+        )
+
+        links = parser.extract_links(soup, BASE_URL)
+
+        self.assertEqual(links, ["https://external.test/"])
 
     async def test_extract_text_supports_css_selector(self) -> None:
         parser = HTMLParser()
@@ -217,7 +228,7 @@ class HTMLParserTests(unittest.IsolatedAsyncioTestCase):
                 "extract_tables",
                 side_effect=ValueError("broken table"),
             ),
-            self.assertLogs("async_crawler", level="WARNING") as logs,
+            self.assertLogs("crawler", level="WARNING") as logs,
         ):
             result = await parser.parse_html(VALID_HTML, BASE_URL)
 
