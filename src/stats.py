@@ -17,6 +17,15 @@ class CrawlerStats:
 
         self._status_codes = Counter()
         self._domains = Counter()
+        self._errors_by_type = Counter()
+        self._permanent_error_urls: list[str] = []
+        self._retry_stats = {
+            "total_retries": 0,
+            "successful_after_retry": 0,
+            "failed_after_retries": 0,
+            "average_retry_delay": 0.0,
+            "errors_by_type": {},
+        }
 
     def start(self) -> None:
         self._started_at = perf_counter()
@@ -46,6 +55,8 @@ class CrawlerStats:
         self,
         url: str,
         status_code: int | None = None,
+        error_type: str | None = None,
+        permanent: bool = False,
     ) -> None:
         self._failed += 1
 
@@ -59,6 +70,20 @@ class CrawlerStats:
         self._domains[
             domain
         ] += 1
+
+        if error_type is not None:
+            self._errors_by_type[
+                error_type
+            ] += 1
+
+        if permanent and url not in self._permanent_error_urls:
+            self._permanent_error_urls.append(url)
+
+    def set_retry_stats(
+        self,
+        retry_stats: dict,
+    ) -> None:
+        self._retry_stats = dict(retry_stats)
 
     def get_stats(self) -> dict:
         total_pages = (
@@ -86,6 +111,16 @@ class CrawlerStats:
             else 0.0
         )
 
+        errors_by_type = Counter(
+            self._errors_by_type
+        )
+        errors_by_type.update(
+            self._retry_stats.get(
+                "errors_by_type",
+                {},
+            )
+        )
+
         return {
             "total_pages": total_pages,
             "successful": self._successful,
@@ -96,6 +131,15 @@ class CrawlerStats:
             ),
             "top_domains": (
                 self._domains.most_common(5)
+            ),
+            "errors_by_type": dict(
+                errors_by_type
+            ),
+            "permanent_error_urls": list(
+                self._permanent_error_urls
+            ),
+            "retry_stats": dict(
+                self._retry_stats
             ),
             "elapsed_time": elapsed_time,
         }
@@ -130,6 +174,9 @@ class CrawlerStats:
 
         status_codes = stats["status_codes"]
         top_domains = stats["top_domains"]
+        errors_by_type = stats["errors_by_type"]
+        permanent_error_urls = stats["permanent_error_urls"]
+        retry_stats = stats["retry_stats"]
 
         max_status_count = max(
             status_codes.values(),
@@ -197,6 +244,15 @@ class CrawlerStats:
                   <td>{count}</td>
               </tr>
           """
+
+        error_rows = "".join(
+            f"<tr><td>{escape(error_type)}</td><td>{count}</td></tr>"
+            for error_type, count in errors_by_type.items()
+        )
+        permanent_error_rows = "".join(
+            f"<tr><td>{escape(url)}</td></tr>"
+            for url in permanent_error_urls
+        )
 
         html = f"""
       <!DOCTYPE html>
@@ -313,6 +369,41 @@ class CrawlerStats:
               </tr>
 
               {domain_rows}
+          </table>
+
+          <h2>Errors by type</h2>
+
+          <table>
+              <tr>
+                  <th>Error type</th>
+                  <th>Count</th>
+              </tr>
+
+              {error_rows}
+          </table>
+
+          <h2>Retry statistics</h2>
+
+          <table>
+              <tr>
+                  <th>Total retries</th>
+                  <th>Successful after retry</th>
+                  <th>Failed after retries</th>
+                  <th>Average retry delay</th>
+              </tr>
+              <tr>
+                  <td>{retry_stats["total_retries"]}</td>
+                  <td>{retry_stats["successful_after_retry"]}</td>
+                  <td>{retry_stats["failed_after_retries"]}</td>
+                  <td>{retry_stats["average_retry_delay"]:.2f} sec</td>
+              </tr>
+          </table>
+
+          <h2>Permanent error URLs</h2>
+
+          <table>
+              <tr><th>URL</th></tr>
+              {permanent_error_rows}
           </table>
       </body>
       </html>

@@ -14,7 +14,7 @@ from src.benchmark import benchmark_scalability, compare_sync_async
 from src.cli import apply_cli_overrides, create_parser
 from src.config import create_storage, load_config
 from src.crawler import AdvancedCrawler
-from src.main import DEMO_FUNCTIONS, run_demo
+from src.main import DEMO_FUNCTIONS, _run_crawler_cli, run_demo
 from src.models import AsyncCrawler
 from src.queue import CrawlerQueue
 from src.sitemap import SitemapParser
@@ -136,6 +136,21 @@ class SitemapParserTests(unittest.IsolatedAsyncioTestCase):
             [SITEMAP_URL, CHILD_SITEMAP_URL, NESTED_SITEMAP_URL],
         )
 
+    async def test_invalid_sitemap_is_logged_and_returns_empty_list(
+        self,
+    ) -> None:
+        session = FakeSession({
+            SITEMAP_URL: FakeResponse("<urlset><broken>"),
+        })
+        parser = SitemapParser(session)  # type: ignore[arg-type]
+
+        with self.assertLogs("crawler", level="WARNING") as logs:
+            urls = await parser.fetch_sitemap(SITEMAP_URL)
+
+        self.assertEqual(urls, [])
+        self.assertIn(SITEMAP_URL, "\n".join(logs.output))
+        self.assertIn("ParseError", "\n".join(logs.output))
+
     async def test_crawler_uses_sitemap_as_url_source(self) -> None:
         sitemap_xml = f"""
         <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
@@ -188,6 +203,97 @@ class SitemapParserTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(crawler.get_stats()["successful"], 1)
 
+    async def test_crawler_filters_urls_from_sitemap(self) -> None:
+        sitemap_xml = f"""
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+          <url><loc>{PAGE_ONE}</loc></url>
+          <url><loc>{PAGE_TWO}</loc></url>
+        </urlset>
+        """
+        session = FakeSession({
+            SITEMAP_URL: FakeResponse(sitemap_xml),
+            PAGE_ONE: FakeResponse(
+                "<html>page</html>",
+                content_type="text/html",
+            ),
+        })
+
+        with patch(
+            "src.models.aiohttp.ClientSession",
+            return_value=session,
+        ):
+            crawler = AsyncCrawler(
+                max_concurrent=1,
+                max_depth=0,
+                requests_per_second=1_000_000,
+                min_delay=0,
+            )
+
+        self.addAsyncCleanup(crawler.close)
+        crawler._wait_before_request = AsyncMock()
+        crawler._parser.parse_html = AsyncMock(
+            return_value={
+                "url": PAGE_ONE,
+                "title": "One",
+                "text": "page",
+                "links": [],
+                "metadata": {},
+            }
+        )
+
+        results = await crawler.crawl(
+            start_urls=[],
+            sitemap_urls=[SITEMAP_URL],
+            include_patterns=[r"/one$"],
+            max_pages=2,
+        )
+
+        self.assertEqual(set(results), {PAGE_ONE})
+        self.assertNotIn(PAGE_TWO, crawler.visited_urls)
+        self.assertEqual(session.requested_urls, [SITEMAP_URL, PAGE_ONE])
+
+    async def test_broken_sitemap_does_not_stop_start_url_crawl(self) -> None:
+        session = FakeSession({
+            SITEMAP_URL: FakeResponse("error", status=503),
+            PAGE_ONE: FakeResponse(
+                "<html>page</html>",
+                content_type="text/html",
+            ),
+        })
+
+        with patch(
+            "src.models.aiohttp.ClientSession",
+            return_value=session,
+        ):
+            crawler = AsyncCrawler(
+                max_concurrent=1,
+                max_depth=0,
+                requests_per_second=1_000_000,
+                min_delay=0,
+            )
+
+        self.addAsyncCleanup(crawler.close)
+        crawler._wait_before_request = AsyncMock()
+        crawler._parser.parse_html = AsyncMock(
+            return_value={
+                "url": PAGE_ONE,
+                "title": "One",
+                "text": "page",
+                "links": [],
+                "metadata": {},
+            }
+        )
+
+        with self.assertLogs("crawler", level="WARNING"):
+            results = await crawler.crawl(
+                start_urls=[PAGE_ONE],
+                sitemap_urls=[SITEMAP_URL],
+                max_pages=1,
+            )
+
+        self.assertEqual(set(results), {PAGE_ONE})
+        self.assertEqual(session.requested_urls, [SITEMAP_URL, PAGE_ONE])
+
 
 class CrawlerStatsTests(unittest.TestCase):
     def test_collects_extended_statistics(self) -> None:
@@ -221,6 +327,19 @@ class CrawlerStatsTests(unittest.TestCase):
         stats = CrawlerStats()
         stats.start()
         stats.record_success("https://example.test/page", 200)
+        stats.record_failure(
+            "https://example.test/missing",
+            404,
+            error_type="PermanentError",
+            permanent=True,
+        )
+        stats.set_retry_stats({
+            "total_retries": 2,
+            "successful_after_retry": 1,
+            "failed_after_retries": 1,
+            "average_retry_delay": 1.5,
+            "errors_by_type": {"TransientError": 2},
+        })
         stats.finish()
 
         with (
@@ -239,11 +358,26 @@ class CrawlerStatsTests(unittest.TestCase):
             exported = json.loads(json_path.read_text(encoding="utf-8"))
             html = html_path.read_text(encoding="utf-8")
 
-        self.assertEqual(exported["total_pages"], 1)
+        self.assertEqual(exported["total_pages"], 2)
         self.assertEqual(exported["successful"], 1)
+        self.assertEqual(
+            exported["errors_by_type"],
+            {
+                "PermanentError": 1,
+                "TransientError": 2,
+            },
+        )
+        self.assertEqual(
+            exported["permanent_error_urls"],
+            ["https://example.test/missing"],
+        )
+        self.assertEqual(exported["retry_stats"]["total_retries"], 2)
         self.assertIn("Crawler report", html)
         self.assertIn("Status codes", html)
         self.assertIn("Top domains", html)
+        self.assertIn("Errors by type", html)
+        self.assertIn("Retry statistics", html)
+        self.assertIn("Permanent error URLs", html)
         self.assertIn("bar-container", html)
 
 
@@ -396,6 +530,51 @@ class AdvancedCrawlerTests(unittest.IsolatedAsyncioTestCase):
         inner.export_to_json.assert_called_once_with("stats.json")
         inner.export_to_html_report.assert_called_once_with("report.html")
         inner.close.assert_awaited_once()
+
+
+class CLIExecutionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_output_contains_crawled_pages_not_statistics(self) -> None:
+        results = {
+            PAGE_ONE: {
+                "url": PAGE_ONE,
+                "title": "One",
+            }
+        }
+        crawler = MagicMock()
+        crawler.crawl = AsyncMock(return_value=results)
+        crawler.close = AsyncMock()
+        crawler.get_stats.return_value = {
+            "total_pages": 1,
+            "successful": 1,
+            "failed": 0,
+            "average_speed": 1.0,
+        }
+        args = create_parser().parse_args([
+            "--config",
+            "crawler.json",
+            "--output",
+            "results.json",
+        ])
+
+        with (
+            patch("src.main.load_config", return_value={}),
+            patch("src.main.apply_cli_overrides", return_value={}),
+            patch(
+                "src.main.AdvancedCrawler.from_config_data",
+                return_value=crawler,
+            ),
+            patch(
+                "src.main._write_json",
+                new=AsyncMock(
+                    return_value=Path("public/uploads/results.json")
+                ),
+            ) as write_json,
+        ):
+            await _run_crawler_cli(args)
+
+        write_json.assert_awaited_once_with("results.json", results)
+        crawler.export_to_json.assert_not_called()
+        crawler.close.assert_awaited_once()
 
 
 class LoggingAndMonitoringTests(unittest.TestCase):
