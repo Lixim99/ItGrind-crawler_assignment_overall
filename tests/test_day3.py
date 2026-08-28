@@ -331,11 +331,30 @@ class AsyncCrawlerDay3Tests(unittest.IsolatedAsyncioTestCase):
 
         results = await crawler.crawl(
             [ROOT_URL],
-            include_patterns=[r"/articles/"],
+            include_patterns=[
+                r"example\.test/$",
+                r"/articles/",
+            ],
             exclude_patterns=[r"/private$"],
         )
 
         self.assertEqual(set(results), {ROOT_URL, allowed_url})
+
+    async def test_crawl_applies_filters_to_start_urls(self) -> None:
+        crawler = self.make_crawler(max_depth=0)
+        allowed_url = "https://example.test/articles/one"
+        excluded_url = "https://example.test/articles/private"
+        not_included_url = "https://example.test/about"
+        self.install_graph(crawler, {allowed_url: []})
+
+        results = await crawler.crawl(
+            [allowed_url, excluded_url, not_included_url],
+            include_patterns=[r"/articles/"],
+            exclude_patterns=[r"/private$"],
+        )
+
+        self.assertEqual(set(results), {allowed_url})
+        self.assertEqual(crawler.visited_urls, {allowed_url})
 
     async def test_crawl_does_not_visit_duplicate_urls(self) -> None:
         crawler = self.make_crawler(max_depth=2)

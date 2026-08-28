@@ -2,6 +2,8 @@ import xml.etree.ElementTree as ET
 
 import aiohttp
 
+from .utils import crawler_logger
+
 
 class SitemapParser:
     def __init__(
@@ -24,47 +26,70 @@ class SitemapParser:
 
         self._visited_sitemaps.add(sitemap_url)
 
-        async with self._session.get(sitemap_url) as response:
-            response.raise_for_status()
+        try:
+            async with self._session.get(sitemap_url) as response:
+                response.raise_for_status()
 
-            xml = await response.text()
+                xml = await response.text()
 
             root = ET.fromstring(xml)
-
-            root_type = self._local_name(
-                root.tag
+        except (
+            aiohttp.ClientError,
+            TimeoutError,
+            ET.ParseError,
+        ) as error:
+            crawler_logger.warning(
+                "Не удалось обработать sitemap | URL: %s | "
+                "тип: %s | ошибка: %r",
+                sitemap_url,
+                type(error).__name__,
+                error,
             )
 
-            if root_type == "urlset":
-                urls = []
+            return []
 
-                for elem in root.iter():
-                    if self._local_name(elem.tag) != "loc":
-                        continue
+        root_type = self._local_name(
+            root.tag
+        )
 
-                    if elem.text:
-                        urls.append(
-                            elem.text.strip()
-                        )
+        if root_type == "urlset":
+            urls = []
 
-                return urls
+            for elem in root.iter():
+                if self._local_name(elem.tag) != "loc":
+                    continue
 
-            elif root_type == "sitemapindex":
-                result = []
-
-                for elem in root.iter():
-                    if self._local_name(elem.tag) != "loc":
-                        continue
-
-                    if not elem.text:
-                        continue
-
-                    child_sitemap = elem.text.strip()
-
-                    urls = await self.fetch_sitemap(
-                        child_sitemap
+                if elem.text:
+                    urls.append(
+                        elem.text.strip()
                     )
 
-                    result.extend(urls)
+            return urls
 
-                return result
+        if root_type == "sitemapindex":
+            result = []
+
+            for elem in root.iter():
+                if self._local_name(elem.tag) != "loc":
+                    continue
+
+                if not elem.text:
+                    continue
+
+                child_sitemap = elem.text.strip()
+
+                urls = await self.fetch_sitemap(
+                    child_sitemap
+                )
+
+                result.extend(urls)
+
+            return result
+
+        crawler_logger.warning(
+            "Неизвестный формат sitemap | URL: %s | root: %s",
+            sitemap_url,
+            root_type,
+        )
+
+        return []

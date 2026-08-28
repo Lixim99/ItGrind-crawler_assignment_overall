@@ -537,7 +537,7 @@ async def _run_crawler_cli(args) -> None:
     crawler = AdvancedCrawler.from_config_data(config)
 
     try:
-        await crawler.crawl()
+        results = await crawler.crawl()
         stats = crawler.get_stats()
 
         print(f"Обработано: {stats['total_pages']}")
@@ -546,7 +546,11 @@ async def _run_crawler_cli(args) -> None:
         print(f"Скорость: {stats['average_speed']:.2f} pages/sec")
 
         if args.output:
-            crawler.export_to_json(args.output)
+            output_path = await _write_json(
+                args.output,
+                results,
+            )
+            print(f"Результаты: {output_path}")
 
         if args.html_report:
             crawler.export_to_html_report(args.html_report)

@@ -27,7 +27,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output",
         type=str,
-        help="Output statistics JSON file",
+        help="Crawled pages JSON file",
     )
 
     parser.add_argument(

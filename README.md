@@ -86,7 +86,7 @@ python -m src.main \
   --max-depth 2 \
   --rate-limit 2 \
   --respect-robots \
-  --output stats.json \
+  --output results.json \
   --html-report report.html
 ```
 
@@ -97,7 +97,7 @@ python -m src.main \
 | `--urls URL [URL ...]` | Стартовые URL |
 | `--max-pages N` | Максимальное количество страниц |
 | `--max-depth N` | Максимальная глубина обхода |
-| `--output FILE` | JSON-файл со статистикой в `public/uploads/` |
+| `--output FILE` | JSON-файл с результатами обхода в `public/uploads/` |
 | `--html-report FILE` | HTML-отчёт в `public/uploads/` |
 | `--config FILE` | JSON-конфигурация, по умолчанию `config.json` |
 | `--respect-robots` | Включить соблюдение `robots.txt` |
@@ -315,7 +315,8 @@ retry_strategy = RetryStrategy(
 - ротация при размере 5 МБ;
 - три резервных файла.
 
-HTML-отчёт содержит итоговую таблицу, распределение HTTP-статусов и топ доменов.
+HTML-отчёт содержит итоговую таблицу, распределение HTTP-статусов, топ доменов, классификацию ошибок, retry-метрики и список URL с постоянными ошибками.
+JSON, указанный через CLI-параметр `--output`, содержит собранные страницы. Статистика с классификацией ошибок и retry-метриками доступна через `get_stats()`, `export_to_json()` и HTML-отчёт.
 
 ## Benchmark и масштабируемость
 
@@ -360,12 +361,12 @@ python -m unittest discover -s tests -v
 - загрузка, таймауты и сетевые ошибки;
 - последовательная и конкурентная производительность;
 - парсинг HTML и битого HTML;
-- очередь, глубина, фильтры и защита от дубликатов;
+- очередь, глубина, фильтры всех источников URL и защита от дубликатов;
 - канонизация `http://host` в `http://host/`;
 - rate limiting и `robots.txt`;
 - retry для timeout/429/503 и отсутствие retry для 404;
 - JSONL, CSV, кодировки и PostgreSQL;
-- sitemap, статистика, отчёты, CLI и демонстрации;
+- sitemap, изоляция его ошибок, статистика, отчёты, CLI и демонстрации;
 - benchmark на 100/500/1000 страниц.
 
 ## Структура проекта

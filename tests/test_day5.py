@@ -187,6 +187,11 @@ class RetryStrategyTests(unittest.IsolatedAsyncioTestCase):
                 "total_retries": 3,
                 "successful_after_retry": 1,
                 "failed_after_retries": 1,
+                "average_retry_delay": 4 / 3,
+                "errors_by_type": {
+                    "TransientError": 1,
+                    "NetworkError": 3,
+                },
             },
         )
 
@@ -291,6 +296,10 @@ class AsyncCrawlerRetryTests(unittest.IsolatedAsyncioTestCase):
                 "message": "HTTP 404",
             },
         )
+        stats = crawler.get_stats()
+        self.assertEqual(stats["errors_by_type"], {"PermanentError": 1})
+        self.assertEqual(stats["permanent_error_urls"], [URL])
+        self.assertEqual(stats["retry_stats"]["total_retries"], 0)
 
     async def test_network_error_is_retried(self) -> None:
         session = SequenceSession(
@@ -313,6 +322,14 @@ class AsyncCrawlerRetryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn(URL, results)
         self.assertEqual(session.requested_urls, [URL, URL])
+        stats = crawler.get_stats()
+        self.assertEqual(stats["retry_stats"]["total_retries"], 1)
+        self.assertEqual(
+            stats["retry_stats"]["successful_after_retry"],
+            1,
+        )
+        self.assertEqual(stats["retry_stats"]["average_retry_delay"], 1.0)
+        self.assertEqual(stats["errors_by_type"], {"NetworkError": 1})
 
     async def test_parse_error_is_saved_without_fetch_retry(self) -> None:
         session = SequenceSession({URL: [Outcome()]})
@@ -328,6 +345,10 @@ class AsyncCrawlerRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             crawler.failed_urls[URL]["type"],
             "ParseError",
+        )
+        self.assertEqual(
+            crawler.get_stats()["errors_by_type"],
+            {"ParseError": 1},
         )
 
 

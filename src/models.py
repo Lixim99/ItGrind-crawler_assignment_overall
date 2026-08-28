@@ -453,6 +453,7 @@ class AsyncCrawler:
 
         self._stats = CrawlerStats()
         self._stats.start()
+        self._retry_strategy.reset_stats()
 
         self._queue = CrawlerQueue()
 
@@ -469,7 +470,17 @@ class AsyncCrawler:
         include_patterns = include_patterns or []
         exclude_patterns = exclude_patterns or []
 
-        allowed_domains = set()
+        domain_sources = start_urls or (sitemap_urls or [])
+        allowed_domains = {
+            urlparse(normalized_url).netloc
+            for raw_url in domain_sources
+            if (
+                normalized_url := normalize_url(
+                    value=raw_url,
+                    base_url=raw_url,
+                )
+            ) is not None
+        }
         seed_urls = list(start_urls)
 
         if sitemap_urls:
@@ -478,9 +489,20 @@ class AsyncCrawler:
             )
 
             for sitemap_url in sitemap_urls:
-                sitemap_pages = await sitemap_parser.fetch_sitemap(
-                    sitemap_url
-                )
+                try:
+                    sitemap_pages = await sitemap_parser.fetch_sitemap(
+                        sitemap_url
+                    )
+                except Exception as error:
+                    crawler_logger.warning(
+                        "Не удалось загрузить sitemap | URL: %s | "
+                        "тип: %s | ошибка: %r",
+                        sitemap_url,
+                        type(error).__name__,
+                        error,
+                    )
+
+                    continue
 
                 seed_urls.extend(
                     sitemap_pages
@@ -490,7 +512,6 @@ class AsyncCrawler:
             if len(self._visited_urls) >= max_pages:
                 break
 
-            # поправить 2 параметр
             normalized_url = normalize_url(
                 value=url,
                 base_url=url,
@@ -502,9 +523,14 @@ class AsyncCrawler:
             if normalized_url in self._visited_urls:
                 continue
 
-            allowed_domains.add(
-                urlparse(normalized_url).netloc
-            )
+            if not self._is_allowed_url(
+                normalized_url,
+                allowed_domains=allowed_domains,
+                same_domain_only=same_domain_only,
+                include_patterns=include_patterns,
+                exclude_patterns=exclude_patterns,
+            ):
+                continue
 
             self._visited_urls.add(
                 normalized_url
@@ -520,6 +546,7 @@ class AsyncCrawler:
             )
 
         if not self._visited_urls:
+            self._sync_retry_stats()
             self._stats.finish()
             return {}
 
@@ -545,6 +572,7 @@ class AsyncCrawler:
 
             await asyncio.gather(*workers, return_exceptions=True)
 
+            self._sync_retry_stats()
             self._stats.finish()
 
         return dict(self._processed_urls)
@@ -668,6 +696,19 @@ class AsyncCrawler:
                 self._stats.record_failure(
                     url=url,
                     status_code=status_code,
+                    error_type=(
+                        None
+                        if isinstance(
+                            error,
+                            (
+                                TransientError,
+                                NetworkError,
+                                PermanentError,
+                            ),
+                        )
+                        else type(error).__name__
+                    ),
+                    permanent=isinstance(error, PermanentError),
                 )
 
                 self._queue.mark_failed(url, error=str(error))
@@ -691,12 +732,19 @@ class AsyncCrawler:
                 )
 
     def get_stats(self) -> dict:
+        self._sync_retry_stats()
         return self._stats.get_stats()
+
+    def _sync_retry_stats(self) -> None:
+        self._stats.set_retry_stats(
+            self._retry_strategy.get_stats()
+        )
 
     def export_to_json(
         self,
         filename: str,
     ) -> None:
+        self._sync_retry_stats()
         self._stats.export_to_json(
             filename
         )
@@ -705,6 +753,7 @@ class AsyncCrawler:
         self,
         filename: str
     ) -> None:
+        self._sync_retry_stats()
         self._stats.export_to_html_report(filename)
 
     def _log_progress(

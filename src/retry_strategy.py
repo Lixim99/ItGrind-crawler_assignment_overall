@@ -1,4 +1,5 @@
 import asyncio
+from collections import Counter
 
 from .exception import TransientError
 from .utils import crawler_logger
@@ -15,9 +16,14 @@ class RetryStrategy:
         self._backoff_factor = backoff_factor
         self._retry_on = retry_on or []
 
+        self.reset_stats()
+
+    def reset_stats(self) -> None:
         self._total_retries = 0
         self._failed_after_retries = 0
         self._successful_after_retry = 0
+        self._total_retry_delay = 0.0
+        self._errors_by_type = Counter()
 
     async def execute_with_retry(
         self,
@@ -34,6 +40,10 @@ class RetryStrategy:
 
                 return result
             except Exception as error:
+                self._errors_by_type[
+                    type(error).__name__
+                ] += 1
+
                 if not isinstance(
                     error,
                     tuple(self._retry_on),
@@ -54,6 +64,8 @@ class RetryStrategy:
                 ):
                     backoff *= 2
 
+                self._total_retry_delay += backoff
+
                 crawler_logger.warning(
                     "Retry | attempt: %s/%s | error: %s | delay: %.2f sec",
                     attempt + 1,
@@ -65,8 +77,16 @@ class RetryStrategy:
                 await asyncio.sleep(backoff)
 
     def get_stats(self) -> dict:
+        average_retry_delay = (
+            self._total_retry_delay / self._total_retries
+            if self._total_retries > 0
+            else 0.0
+        )
+
         return {
             "total_retries": self._total_retries,
             "successful_after_retry": self._successful_after_retry,
             "failed_after_retries": self._failed_after_retries,
+            "average_retry_delay": average_retry_delay,
+            "errors_by_type": dict(self._errors_by_type),
         }
