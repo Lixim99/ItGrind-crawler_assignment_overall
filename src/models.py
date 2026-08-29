@@ -163,7 +163,8 @@ class AsyncCrawler:
 
         if parser is None:
             parser = RobotsParser(
-                self._session
+                self._session,
+                before_request=self._wait_before_robots_request,
             )
 
             self._robots_parsers[domain] = parser
@@ -238,6 +239,33 @@ class AsyncCrawler:
                 user_agent=self._user_agent,
             )
 
+        await self._wait_for_rate_limit(url)
+
+        # Дополнительно соблюдаем Crawl-delay,
+        # если robots.txt его задал.
+        if robots_delay > 0:
+            robots_limiter = (
+                self._get_robots_limiter(
+                    domain,
+                    robots_delay,
+                )
+            )
+
+            await robots_limiter.acquire()
+
+    async def _wait_before_robots_request(
+        self,
+        robots_url: str,
+    ) -> None:
+        await self._wait_for_rate_limit(robots_url)
+        self._record_request_start()
+
+    async def _wait_for_rate_limit(
+        self,
+        url: str,
+    ) -> None:
+        domain = urlparse(url).netloc
+
         # Jitter.
         # Отдельного параметра jitter в ТЗ нет,
         # поэтому использую случайную задержку
@@ -255,18 +283,6 @@ class AsyncCrawler:
         await self._rate_limiter.acquire(
             domain
         )
-
-        # Дополнительно соблюдаем Crawl-delay,
-        # если robots.txt его задал.
-        if robots_delay > 0:
-            robots_limiter = (
-                self._get_robots_limiter(
-                    domain,
-                    robots_delay,
-                )
-            )
-
-            await robots_limiter.acquire()
 
     def _record_request_start(
         self,
@@ -612,9 +628,6 @@ class AsyncCrawler:
                 html = await self._retry_strategy.execute_with_retry(
                     fetch_with_timeout
                 )
-
-                if not html:
-                    raise RuntimeError("Не удалось загрузить страницу")
 
                 try:
                     parsed_page = await self._parser.parse_html(

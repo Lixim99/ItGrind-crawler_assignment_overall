@@ -85,8 +85,16 @@ class FakeSession:
 class SitemapParserTests(unittest.IsolatedAsyncioTestCase):
     async def test_parses_regular_sitemap(self) -> None:
         xml = f"""
-        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-          <url><loc>{PAGE_ONE}</loc></url>
+        <urlset
+            xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+            xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"
+        >
+          <url>
+            <loc>{PAGE_ONE}</loc>
+            <image:image>
+              <image:loc>https://example.test/image.jpg</image:loc>
+            </image:image>
+          </url>
           <url><loc>{PAGE_TWO}</loc></url>
         </urlset>
         """
@@ -99,6 +107,41 @@ class SitemapParserTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(urls, [PAGE_ONE, PAGE_TWO])
         self.assertEqual(session.requested_urls, [SITEMAP_URL])
+
+    async def test_sitemap_index_ignores_nested_extension_locations(
+        self,
+    ) -> None:
+        root_xml = f"""
+        <sitemapindex
+            xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+            xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"
+        >
+          <sitemap>
+            <loc>{CHILD_SITEMAP_URL}</loc>
+            <image:image>
+              <image:loc>https://example.test/not-a-sitemap.jpg</image:loc>
+            </image:image>
+          </sitemap>
+        </sitemapindex>
+        """
+        child_xml = f"""
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+          <url><loc>{PAGE_ONE}</loc></url>
+        </urlset>
+        """
+        session = FakeSession({
+            SITEMAP_URL: FakeResponse(root_xml),
+            CHILD_SITEMAP_URL: FakeResponse(child_xml),
+        })
+        parser = SitemapParser(session)  # type: ignore[arg-type]
+
+        urls = await parser.fetch_sitemap(SITEMAP_URL)
+
+        self.assertEqual(urls, [PAGE_ONE])
+        self.assertEqual(
+            session.requested_urls,
+            [SITEMAP_URL, CHILD_SITEMAP_URL],
+        )
 
     async def test_recursively_parses_sitemap_index_and_uses_cache(
         self,

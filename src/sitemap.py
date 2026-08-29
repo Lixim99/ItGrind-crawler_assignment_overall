@@ -17,6 +17,29 @@ class SitemapParser:
     def _local_name(tag: str) -> str:
         return tag.split("}")[-1]
 
+    @classmethod
+    def _get_locations(
+        cls,
+        root: ET.Element,
+        item_name: str,
+    ) -> list[str]:
+        locations = []
+
+        for item in root:
+            if cls._local_name(item.tag) != item_name:
+                continue
+
+            for child in item:
+                if cls._local_name(child.tag) != "loc":
+                    continue
+
+                if child.text and child.text.strip():
+                    locations.append(child.text.strip())
+
+                break
+
+        return locations
+
     async def fetch_sitemap(
         self,
         sitemap_url: str
@@ -53,31 +76,18 @@ class SitemapParser:
         )
 
         if root_type == "urlset":
-            urls = []
-
-            for elem in root.iter():
-                if self._local_name(elem.tag) != "loc":
-                    continue
-
-                if elem.text:
-                    urls.append(
-                        elem.text.strip()
-                    )
-
-            return urls
+            return self._get_locations(
+                root,
+                "url",
+            )
 
         if root_type == "sitemapindex":
             result = []
 
-            for elem in root.iter():
-                if self._local_name(elem.tag) != "loc":
-                    continue
-
-                if not elem.text:
-                    continue
-
-                child_sitemap = elem.text.strip()
-
+            for child_sitemap in self._get_locations(
+                root,
+                "sitemap",
+            ):
                 urls = await self.fetch_sitemap(
                     child_sitemap
                 )
