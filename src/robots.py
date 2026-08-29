@@ -1,3 +1,5 @@
+import asyncio
+from collections.abc import Awaitable, Callable
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
 
@@ -8,12 +10,15 @@ class RobotsParser:
     def __init__(
         self,
         session: aiohttp.ClientSession,
+        before_request: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._session = session
+        self._before_request = before_request
         self._parser = RobotFileParser()
 
         self._domain: str | None = None
         self._loaded = False
+        self._load_lock = asyncio.Lock()
 
     async def fetch_robots(
         self,
@@ -34,48 +39,61 @@ class RobotsParser:
                 "cached": True,
             }
 
-        self._domain = domain
+        async with self._load_lock:
+            if self._loaded:
+                return {
+                    "domain": domain,
+                    "cached": True,
+                }
 
-        try:
-            async with self._session.get(
-                robots_url
-            ) as response:
+            self._domain = domain
 
-                if response.status == 200:
-                    content = await response.text()
+            if self._before_request is not None:
+                await self._before_request(robots_url)
 
-                    self._parser.parse(
-                        content.splitlines()
-                    )
+            try:
+                async with self._session.get(
+                    robots_url
+                ) as response:
 
-                elif 400 <= response.status < 500:
-                    # robots.txt недоступен —
-                    # разрешаем обход.
-                    self._parser.parse([
-                        "User-agent: *",
-                        "Allow: /",
-                    ])
+                    if response.status == 200:
+                        content = await response.text()
 
-                else:
-                    # 5xx — временная проблема сервера.
-                    # Для crawler запрещаем обход.
-                    self._parser.parse([
-                        "User-agent: *",
-                        "Disallow: /",
-                    ])
+                        self._parser.parse(
+                            content.splitlines()
+                        )
 
-        except aiohttp.ClientError:
-            self._parser.parse([
-                "User-agent: *",
-                "Disallow: /",
-            ])
+                    elif 400 <= response.status < 500:
+                        # robots.txt недоступен —
+                        # разрешаем обход.
+                        self._parser.parse([
+                            "User-agent: *",
+                            "Allow: /",
+                        ])
 
-        self._loaded = True
+                    else:
+                        # 5xx — временная проблема сервера.
+                        # Для crawler запрещаем обход.
+                        self._parser.parse([
+                            "User-agent: *",
+                            "Disallow: /",
+                        ])
 
-        return {
-            "domain": domain,
-            "cached": False,
-        }
+            except (
+                aiohttp.ClientError,
+                TimeoutError,
+            ):
+                self._parser.parse([
+                    "User-agent: *",
+                    "Disallow: /",
+                ])
+
+            self._loaded = True
+
+            return {
+                "domain": domain,
+                "cached": False,
+            }
 
     def can_fetch(
         self,

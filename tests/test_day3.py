@@ -248,7 +248,7 @@ class AsyncCrawlerDay3Tests(unittest.IsolatedAsyncioTestCase):
             timeout_multiplier: float = 1.0,
         ) -> str:
             if url in failed_urls:
-                return ""
+                raise RuntimeError("fetch failed")
 
             crawler._response_info[url] = {
                 "status_code": 200,

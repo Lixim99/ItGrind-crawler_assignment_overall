@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from dataclasses import dataclass
 from time import perf_counter
@@ -23,6 +24,7 @@ class Route:
     body: str = ""
     status: int = 200
     error: BaseException | None = None
+    delay: float = 0.0
 
 
 class FakeResponse:
@@ -32,6 +34,9 @@ class FakeResponse:
         self._route = route
 
     async def __aenter__(self) -> FakeResponse:
+        if self._route.delay > 0:
+            await asyncio.sleep(self._route.delay)
+
         if self._route.error is not None:
             raise self._route.error
 
@@ -129,6 +134,31 @@ class RobotsParserTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(parser.can_fetch(PRIVATE_URL, "MyBot"))
         self.assertEqual(parser.get_crawl_delay("MyBot"), 2.0)
 
+    async def test_concurrent_calls_download_robots_once(self) -> None:
+        session = FakeSession({
+            ROBOTS_URL: Route(
+                body="User-agent: *\nAllow: /",
+                delay=0.02,
+            )
+        })
+        before_request = AsyncMock()
+        parser = RobotsParser(
+            session,
+            before_request=before_request,
+        )
+
+        results = await asyncio.gather(*(
+            parser.fetch_robots(f"{DOMAIN}/page-{number}")
+            for number in range(5)
+        ))
+
+        self.assertEqual(session.requested_urls, [ROBOTS_URL])
+        before_request.assert_awaited_once_with(ROBOTS_URL)
+        self.assertEqual(
+            sum(not result["cached"] for result in results),
+            1,
+        )
+
 
 class AsyncCrawlerDay4Tests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
@@ -221,6 +251,32 @@ class AsyncCrawlerDay4Tests(unittest.IsolatedAsyncioTestCase):
         limiter_factory.assert_called_once_with("example.test", 2.0)
         robots_limiter.acquire.assert_awaited_once_with()
         self.assertEqual(session.requested_urls, [ROBOTS_URL])
+
+    async def test_robots_and_page_use_main_rate_limiter(self) -> None:
+        page_url = f"{DOMAIN}/public"
+        session = FakeSession({
+            ROBOTS_URL: Route(body="User-agent: *\nAllow: /"),
+            page_url: Route(body="page"),
+        })
+        crawler = self.make_crawler(
+            session,
+            respect_robots=True,
+        )
+        self.addAsyncCleanup(crawler.close)
+        crawler._rate_limiter.acquire = AsyncMock()
+
+        with self.assertLogs("crawler", level="INFO"):
+            result = await crawler.fetch_url(page_url)
+
+        self.assertEqual(result, "page")
+        self.assertEqual(
+            crawler._rate_limiter.acquire.await_args_list,
+            [call("example.test"), call("example.test")],
+        )
+        self.assertEqual(
+            session.requested_urls,
+            [ROBOTS_URL, page_url],
+        )
 
     async def test_exponential_backoff_retries_transient_errors(self) -> None:
         url = f"{DOMAIN}/unstable"

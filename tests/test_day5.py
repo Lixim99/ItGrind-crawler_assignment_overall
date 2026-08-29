@@ -13,6 +13,7 @@ from src.exception import (
     TransientError,
 )
 from src.models import AsyncCrawler
+from src.parser import HTMLParser
 from src.retry_strategy import RetryStrategy
 
 
@@ -350,6 +351,19 @@ class AsyncCrawlerRetryTests(unittest.IsolatedAsyncioTestCase):
             crawler.get_stats()["errors_by_type"],
             {"ParseError": 1},
         )
+
+    async def test_empty_http_200_page_is_processed_successfully(self) -> None:
+        session = SequenceSession({URL: [Outcome(body="")]})
+        crawler = self.make_crawler(session)
+        crawler._parser = HTMLParser()
+
+        with self.assertLogs("crawler", level="WARNING"):
+            results = await crawler.crawl([URL], max_pages=1)
+
+        self.assertEqual(results[URL]["text"], "")
+        self.assertEqual(results[URL]["links"], [])
+        self.assertNotIn(URL, crawler.failed_urls)
+        self.assertEqual(crawler.get_stats()["successful"], 1)
 
 
 if __name__ == "__main__":
