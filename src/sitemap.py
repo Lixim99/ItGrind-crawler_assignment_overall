@@ -1,4 +1,5 @@
 import xml.etree.ElementTree as ET
+from collections.abc import Awaitable, Callable
 
 import aiohttp
 
@@ -8,9 +9,11 @@ from .utils import crawler_logger
 class SitemapParser:
     def __init__(
         self,
-        session: aiohttp.ClientSession
-    ):
+        session: aiohttp.ClientSession,
+        before_request: Callable[[str], Awaitable[None]] | None = None,
+    ) -> None:
         self._session = session
+        self._before_request = before_request
         self._visited_sitemaps: set[str] = set()
 
     @staticmethod
@@ -50,6 +53,9 @@ class SitemapParser:
         self._visited_sitemaps.add(sitemap_url)
 
         try:
+            if self._before_request is not None:
+                await self._before_request(sitemap_url)
+
             async with self._session.get(sitemap_url) as response:
                 response.raise_for_status()
 

@@ -125,11 +125,10 @@ class AsyncCrawler:
         self._blocked_urls: set[str] = set()
         self._stats = CrawlerStats()
 
-        # Один RobotsParser на один домен.
-        self._robots_parsers: dict[
-            str,
-            RobotsParser
-        ] = {}
+        self._robots_parser = RobotsParser(
+            self._session,
+            before_request=self._wait_before_robots_request,
+        )
 
         # Отдельный limiter для Crawl-delay каждого домена.
         self._robots_limiters: dict[
@@ -157,21 +156,9 @@ class AsyncCrawler:
         self,
         url: str,
     ) -> RobotsParser:
-        domain = urlparse(url).netloc
+        await self._robots_parser.fetch_robots(url)
 
-        parser = self._robots_parsers.get(domain)
-
-        if parser is None:
-            parser = RobotsParser(
-                self._session,
-                before_request=self._wait_before_robots_request,
-            )
-
-            self._robots_parsers[domain] = parser
-
-        await parser.fetch_robots(url)
-
-        return parser
+        return self._robots_parser
 
     def _get_timeout(
             self,
@@ -237,6 +224,7 @@ class AsyncCrawler:
 
             robots_delay = robots.get_crawl_delay(
                 user_agent=self._user_agent,
+                domain=domain,
             )
 
         await self._wait_for_rate_limit(url)
@@ -258,6 +246,13 @@ class AsyncCrawler:
         robots_url: str,
     ) -> None:
         await self._wait_for_rate_limit(robots_url)
+        self._record_request_start()
+
+    async def _wait_before_sitemap_request(
+        self,
+        sitemap_url: str,
+    ) -> None:
+        await self._wait_before_request(sitemap_url)
         self._record_request_start()
 
     async def _wait_for_rate_limit(
@@ -383,6 +378,16 @@ class AsyncCrawler:
 
                 return content
 
+        except (TransientError, PermanentError) as error:
+            crawler_logger.error(
+                "HTTP-ошибка | URL: %s | тип: %s | статус: %s",
+                url,
+                type(error).__name__,
+                error.status,
+            )
+
+            raise
+
         except TimeoutError as error:
             crawler_logger.error(
                 "Таймаут | URL: %s | "
@@ -501,7 +506,8 @@ class AsyncCrawler:
 
         if sitemap_urls:
             sitemap_parser = SitemapParser(
-                self._session
+                self._session,
+                before_request=self._wait_before_sitemap_request,
             )
 
             for sitemap_url in sitemap_urls:

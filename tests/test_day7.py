@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from time import perf_counter
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import aiohttp
 
@@ -243,6 +243,10 @@ class SitemapParserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             session.requested_urls,
             [SITEMAP_URL, PAGE_ONE],
+        )
+        self.assertEqual(
+            crawler._wait_before_request.await_args_list,
+            [call(SITEMAP_URL), call(PAGE_ONE)],
         )
         self.assertEqual(crawler.get_stats()["successful"], 1)
 
