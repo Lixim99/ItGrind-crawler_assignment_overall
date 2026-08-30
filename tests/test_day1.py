@@ -139,10 +139,34 @@ class AsyncCrawlerTests(unittest.IsolatedAsyncioTestCase):
         session = FakeSession({url: Route(status=404)})
         crawler = self.make_crawler(session)
 
-        with self.assertRaises(PermanentError) as raised:
+        with (
+            self.assertLogs("crawler", level="ERROR") as logs,
+            self.assertRaises(PermanentError) as raised,
+        ):
             await crawler.fetch_url(url)
 
         self.assertEqual(raised.exception.status, 404)
+        message = "\n".join(logs.output)
+        self.assertIn(url, message)
+        self.assertIn("PermanentError", message)
+        self.assertIn("404", message)
+
+    async def test_fetch_url_logs_transient_http_error(self) -> None:
+        url = "https://example.test/unavailable"
+        session = FakeSession({url: Route(status=503)})
+        crawler = self.make_crawler(session)
+
+        with (
+            self.assertLogs("crawler", level="ERROR") as logs,
+            self.assertRaises(TransientError) as raised,
+        ):
+            await crawler.fetch_url(url)
+
+        self.assertEqual(raised.exception.status, 503)
+        message = "\n".join(logs.output)
+        self.assertIn(url, message)
+        self.assertIn("TransientError", message)
+        self.assertIn("503", message)
 
     async def test_fetch_url_handles_timeout(self) -> None:
         url = "https://example.test/slow"

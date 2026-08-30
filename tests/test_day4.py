@@ -17,6 +17,8 @@ from src.robots import RobotsParser
 DOMAIN = "https://example.test"
 ROBOTS_URL = f"{DOMAIN}/robots.txt"
 PRIVATE_URL = f"{DOMAIN}/private"
+SECOND_DOMAIN = "https://second.test"
+SECOND_ROBOTS_URL = f"{SECOND_DOMAIN}/robots.txt"
 
 
 @dataclass(frozen=True)
@@ -157,6 +159,45 @@ class RobotsParserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             sum(not result["cached"] for result in results),
             1,
+        )
+
+    async def test_caches_independent_rules_for_each_domain(self) -> None:
+        session = FakeSession({
+            ROBOTS_URL: Route(body=(
+                "User-agent: MyBot\n"
+                "Disallow: /private\n"
+                "Crawl-delay: 2"
+            )),
+            SECOND_ROBOTS_URL: Route(body=(
+                "User-agent: MyBot\n"
+                "Allow: /\n"
+                "Crawl-delay: 4"
+            )),
+        })
+        parser = RobotsParser(session)
+
+        first = await parser.fetch_robots(f"{DOMAIN}/page")
+        second = await parser.fetch_robots(f"{SECOND_DOMAIN}/page")
+        cached = await parser.fetch_robots(f"{DOMAIN}/other")
+
+        self.assertFalse(first["cached"])
+        self.assertFalse(second["cached"])
+        self.assertTrue(cached["cached"])
+        self.assertEqual(
+            session.requested_urls,
+            [ROBOTS_URL, SECOND_ROBOTS_URL],
+        )
+        self.assertFalse(parser.can_fetch(PRIVATE_URL, "MyBot"))
+        self.assertTrue(
+            parser.can_fetch(f"{SECOND_DOMAIN}/private", "MyBot")
+        )
+        self.assertEqual(
+            parser.get_crawl_delay("MyBot", domain="example.test"),
+            2.0,
+        )
+        self.assertEqual(
+            parser.get_crawl_delay("MyBot", domain=SECOND_DOMAIN),
+            4.0,
         )
 
 

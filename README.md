@@ -7,7 +7,7 @@
 - асинхронный HTTP-клиент на `aiohttp.ClientSession`;
 - глобальное и отдельное для домена ограничение конкурентности;
 - rate limiting, минимальная задержка, jitter и `Crawl-delay`;
-- проверка `robots.txt`, rate limiting и конкурентно-безопасное кэширование правил;
+- проверка `robots.txt`, rate limiting и конкурентно-безопасное кэширование правил отдельно для каждого домена;
 - очередь URL с приоритетом и ограничением глубины;
 - фильтры домена, включения и исключения URL;
 - защита от повторной обработки URL;
@@ -366,7 +366,7 @@ python -m unittest discover -s tests -v
 - rate limiting и `robots.txt`;
 - retry для timeout/429/503 и отсутствие retry для 404;
 - JSONL, CSV, кодировки и PostgreSQL;
-- sitemap без URL из image/video-расширений, изоляция его ошибок, статистика, отчёты, CLI и демонстрации;
+- sitemap с общей robots/rate-limit политикой, без URL из image/video-расширений и с изоляцией ошибок;
 - benchmark на 100/500/1000 страниц.
 
 ## Структура проекта
