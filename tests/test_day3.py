@@ -31,6 +31,26 @@ def parsed_page(url: str, links: list[str]) -> dict[str, object]:
 
 
 class CrawlerQueueTests(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_queue_returns_none(self) -> None:
+        queue = CrawlerQueue()
+
+        result = await asyncio.wait_for(queue.get_next(), timeout=0.1)
+
+        self.assertIsNone(result)
+
+    async def test_empty_queue_returns_none_while_url_is_processed(
+        self,
+    ) -> None:
+        queue = CrawlerQueue()
+        queue.add_url(ROOT_URL)
+
+        processing_url = await queue.get_next()
+        result = await asyncio.wait_for(queue.get_next(), timeout=0.1)
+
+        self.assertIsNone(result)
+        queue.mark_processed(processing_url)
+        await queue.join()
+
     async def test_queue_returns_urls_by_priority(self) -> None:
         queue = CrawlerQueue()
         queue.add_url("https://example.test/low", priority=10)

@@ -31,6 +31,17 @@ class CrawlerQueue:
         self._urls.add(url)
 
     async def get_next(self) -> str | None:
+        try:
+            _, _, url = self._queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return None
+
+        self._urls.remove(url)
+        self._in_progress.add(url)
+
+        return url
+
+    async def wait_for_next(self) -> str:
         _, _, url = await self._queue.get()
 
         self._urls.remove(url)

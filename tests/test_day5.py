@@ -18,6 +18,7 @@ from src.retry_strategy import RetryStrategy
 
 
 URL = "https://example.test/page"
+SECOND_URL = "https://example.test/second"
 
 
 @dataclass(frozen=True)
@@ -219,6 +220,64 @@ class AsyncCrawlerRetryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.addAsyncCleanup(crawler.close)
         return crawler
+
+    async def test_fetch_url_retries_direct_call(self) -> None:
+        session = SequenceSession({
+            URL: [Outcome(status=503), Outcome(body="recovered")]
+        })
+        crawler = self.make_crawler(session)
+
+        with patch(
+            "src.retry_strategy.asyncio.sleep",
+            new=AsyncMock(),
+        ) as sleep:
+            result = await crawler.fetch_url(URL)
+
+        self.assertEqual(result, "recovered")
+        self.assertEqual(session.requested_urls, [URL, URL])
+        self.assertEqual(
+            [timeout.total for timeout in session.timeouts],
+            [3, 6],
+        )
+        sleep.assert_awaited_once_with(1.0)
+
+    async def test_fetch_urls_retries_each_request(self) -> None:
+        session = SequenceSession({
+            URL: [Outcome(status=503), Outcome(body="first")],
+            SECOND_URL: [Outcome(body="second")],
+        })
+        crawler = self.make_crawler(session)
+
+        with patch(
+            "src.retry_strategy.asyncio.sleep",
+            new=AsyncMock(),
+        ):
+            results = await crawler.fetch_urls([URL, SECOND_URL])
+
+        self.assertEqual(
+            results,
+            {URL: "first", SECOND_URL: "second"},
+        )
+        self.assertEqual(session.requested_urls.count(URL), 2)
+        self.assertEqual(session.requested_urls.count(SECOND_URL), 1)
+
+    async def test_fetch_and_parse_retries_request(self) -> None:
+        session = SequenceSession({
+            URL: [
+                Outcome(error=asyncio.TimeoutError()),
+                Outcome(),
+            ]
+        })
+        crawler = self.make_crawler(session)
+
+        with patch(
+            "src.retry_strategy.asyncio.sleep",
+            new=AsyncMock(),
+        ):
+            result = await crawler.fetch_and_parse(URL)
+
+        self.assertEqual(result, parsed_page(URL))
+        self.assertEqual(session.requested_urls, [URL, URL])
 
     async def test_timeout_is_retried_and_timeout_increases(self) -> None:
         session = SequenceSession(

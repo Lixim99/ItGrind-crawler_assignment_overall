@@ -76,12 +76,6 @@ class AsyncCrawler:
                 "min_delay cannot be negative"
             )
 
-        timeout = aiohttp.ClientTimeout(
-            total=30,
-            connect=5,
-            sock_read=10,
-        )
-
         self._max_concurrent = max_concurrent
         self._max_depth = max_depth
         self._respect_robots = respect_robots
@@ -91,6 +85,8 @@ class AsyncCrawler:
         self._read_timeout = read_timeout
         self._total_timeout = total_timeout
         self._storage = storage
+
+        timeout = self._get_timeout()
 
         self._session = aiohttp.ClientSession(
             timeout=timeout,
@@ -326,6 +322,27 @@ class AsyncCrawler:
         return self._get_request_stats()
 
     async def fetch_url(
+        self,
+        url: str,
+        timeout_multiplier: float = 1.0,
+    ) -> str:
+        attempt = 0
+
+        async def fetch_attempt() -> str:
+            nonlocal attempt
+
+            attempt += 1
+
+            return await self._fetch_url_once(
+                url,
+                timeout_multiplier=timeout_multiplier * attempt,
+            )
+
+        return await self._retry_strategy.execute_with_retry(
+            fetch_attempt
+        )
+
+    async def _fetch_url_once(
         self,
         url: str,
         timeout_multiplier: float = 1.0,
@@ -610,30 +627,13 @@ class AsyncCrawler:
         started: float
     ):
         while True:
-            url = await self._queue.get_next()
+            url = await self._queue.wait_for_next()
             depth = self._url_depths[url]
 
             self._active_tasks += 1
 
-            attempt = 0
-
-            # Обертка для увеличения timeout при повторных попытках
-            async def fetch_with_timeout(
-                cur_url=url
-            ):
-                nonlocal attempt
-
-                attempt += 1
-
-                return await self.fetch_url(
-                    cur_url,
-                    timeout_multiplier=attempt,
-                )
-
             try:
-                html = await self._retry_strategy.execute_with_retry(
-                    fetch_with_timeout
-                )
+                html = await self.fetch_url(url)
 
                 try:
                     parsed_page = await self._parser.parse_html(
