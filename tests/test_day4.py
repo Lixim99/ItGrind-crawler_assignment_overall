@@ -331,7 +331,7 @@ class AsyncCrawlerDay4Tests(unittest.IsolatedAsyncioTestCase):
         crawler = self.make_crawler(session)
         crawler._wait_before_request = AsyncMock()
         self.addAsyncCleanup(crawler.close)
-        strategy = RetryStrategy(
+        crawler._retry_strategy = RetryStrategy(
             max_retries=2,
             retry_on=[NetworkError],
         )
@@ -344,7 +344,7 @@ class AsyncCrawlerDay4Tests(unittest.IsolatedAsyncioTestCase):
             self.assertLogs("crawler", level="INFO"),
             self.assertRaises(NetworkError),
         ):
-            await strategy.execute_with_retry(crawler.fetch_url, url)
+            await crawler.fetch_url(url)
 
         self.assertEqual(session.requested_urls, [url, url, url])
         self.assertEqual(sleep.await_args_list, [call(1.0), call(2.0)])

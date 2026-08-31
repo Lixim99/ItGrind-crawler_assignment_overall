@@ -284,9 +284,7 @@ retry_strategy = RetryStrategy(
 )
 ```
 
-`crawl()` автоматически повторяет временные и сетевые ошибки. HTTP 429 получает увеличенную задержку. HTTP 401/403/404 классифицируются как постоянные и не повторяются.
-
-Прямые вызовы `fetch_url()`, `fetch_urls()` и `fetch_and_parse()` не оборачиваются в `RetryStrategy` и могут выбросить `TransientError`, `NetworkError`, `PermanentError` или `RobotsBlockedError`.
+`fetch_url()`, `fetch_urls()`, `fetch_and_parse()` и `crawl()` автоматически повторяют временные и сетевые ошибки. HTTP 429 получает увеличенную задержку. HTTP 401/403/404 классифицируются как постоянные и не повторяются. После исчерпания попыток публичные методы могут вернуть или передать вызывающему коду итоговый `TransientError`, `NetworkError`, `PermanentError` либо `RobotsBlockedError` согласно своему контракту.
 
 ## Формат сохраняемой страницы
 

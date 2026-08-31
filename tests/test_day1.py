@@ -10,6 +10,7 @@ import aiohttp
 
 from src.exception import NetworkError, PermanentError, TransientError
 from src.models import AsyncCrawler
+from src.retry_strategy import RetryStrategy
 
 
 @dataclass(frozen=True)
@@ -103,22 +104,28 @@ class AsyncCrawlerTests(unittest.IsolatedAsyncioTestCase):
                 max_concurrent=max_concurrent,
                 requests_per_second=1_000_000,
                 min_delay=0,
+                retry_strategy=RetryStrategy(max_retries=0),
             )
 
         return crawler
 
-    async def test_client_session_uses_connect_and_read_timeouts(self) -> None:
+    async def test_client_session_uses_configured_timeouts(self) -> None:
         session = FakeSession({})
 
         with patch(
             "src.models.aiohttp.ClientSession",
             return_value=session,
         ) as session_constructor:
-            crawler = AsyncCrawler()
+            crawler = AsyncCrawler(
+                connect_timeout=1.5,
+                read_timeout=2.5,
+                total_timeout=7.5,
+            )
 
         timeout = session_constructor.call_args.kwargs["timeout"]
-        self.assertEqual(timeout.connect, 5)
-        self.assertEqual(timeout.sock_read, 10)
+        self.assertEqual(timeout.connect, 1.5)
+        self.assertEqual(timeout.sock_read, 2.5)
+        self.assertEqual(timeout.total, 7.5)
         await crawler.close()
 
     async def test_fetch_url_returns_complete_page_and_logs_success(self) -> None:
