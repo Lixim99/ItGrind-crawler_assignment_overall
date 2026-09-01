@@ -93,6 +93,61 @@ def parsed_page(url: str) -> dict[str, object]:
 
 
 class RetryStrategyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_type_specific_retry_limits_backoff_and_url_logs(
+        self,
+    ) -> None:
+        strategy = RetryStrategy(
+            max_retries=5,
+            backoff_factor=2.0,
+            retry_on=[TransientError, NetworkError],
+            max_retries_by_type={
+                TransientError: 1,
+                NetworkError: 2,
+            },
+            backoff_factors_by_type={
+                TransientError: 3.0,
+                NetworkError: 1.5,
+            },
+        )
+        network_operation = AsyncMock(side_effect=[
+            NetworkError("offline-1"),
+            NetworkError("offline-2"),
+            "success",
+        ])
+        transient_operation = AsyncMock(
+            side_effect=TransientError("temporary", status=503)
+        )
+
+        with (
+            patch(
+                "src.retry_strategy.asyncio.sleep",
+                new=AsyncMock(),
+            ) as sleep,
+            self.assertLogs("crawler", level="INFO") as logs,
+        ):
+            result = await strategy.execute_with_retry(
+                network_operation,
+                retry_url=URL,
+            )
+
+            with self.assertRaises(TransientError):
+                await strategy.execute_with_retry(
+                    transient_operation,
+                    retry_url=URL,
+                )
+
+        self.assertEqual(result, "success")
+        self.assertEqual(network_operation.await_count, 3)
+        self.assertEqual(transient_operation.await_count, 2)
+        self.assertEqual(
+            sleep.await_args_list,
+            [call(1.0), call(1.5), call(1.0)],
+        )
+        messages = "\n".join(logs.output)
+        self.assertIn(URL, messages)
+        self.assertIn("outcome: success", messages)
+        self.assertIn("outcome: failure", messages)
+
     async def test_exponential_backoff(self) -> None:
         operation = AsyncMock(
             side_effect=[

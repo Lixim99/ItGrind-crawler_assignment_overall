@@ -346,6 +346,14 @@ async def demo_day_5() -> None:
         max_retries=2,
         backoff_factor=2.0,
         retry_on=[TransientError, NetworkError],
+        max_retries_by_type={
+            TransientError: 2,
+            NetworkError: 3,
+        },
+        backoff_factors_by_type={
+            TransientError: 2.0,
+            NetworkError: 1.5,
+        },
     )
 
     async with _demo_site() as base:

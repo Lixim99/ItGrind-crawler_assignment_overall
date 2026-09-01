@@ -23,7 +23,15 @@ class DataStorage(ABC):
 
 
 class JSONStorage(DataStorage):
-    def __init__(self, file: str):
+    def __init__(
+        self,
+        file: str,
+        formatted: bool = False,
+        indent: int = 4,
+    ):
+        if indent <= 0:
+            raise ValueError("indent must be greater than zero")
+
         self._full_path = get_upload_path(file)
 
         self._full_path.parent.mkdir(
@@ -37,6 +45,10 @@ class JSONStorage(DataStorage):
         self._batch_size = 10
         self._buffer: list[str] = []
         self._lock = asyncio.Lock()
+        self._formatted = formatted
+        self._indent = indent
+        self._document_started = False
+        self._closed = False
 
     async def _flush_with_retry(self) -> None:
         for attempt in range(3):
@@ -54,14 +66,20 @@ class JSONStorage(DataStorage):
         if not self._buffer:
             return
 
-        content = "".join(self._buffer)
+        if self._formatted:
+            prefix = ",\n" if self._document_started else "[\n"
+            content = prefix + ",\n".join(self._buffer)
+            mode = "a" if self._document_started else "w"
+        else:
+            content = "".join(self._buffer)
+            mode = "a"
 
         count = len(self._buffer)
 
         try:
             async with aiofiles.open(
                 file=self._full_path,
-                mode="a",
+                mode=mode,
                 encoding="utf-8",
             ) as file:
                 await file.write(content)
@@ -75,17 +93,62 @@ class JSONStorage(DataStorage):
         self._saved_count += count
         self._flush_count += 1
 
+        if self._formatted:
+            self._document_started = True
+
         self._buffer.clear()
 
+    async def _finalize(self) -> None:
+        if not self._formatted:
+            return
+
+        content = "\n]\n" if self._document_started else "[]\n"
+        mode = "a" if self._document_started else "w"
+
+        try:
+            async with aiofiles.open(
+                file=self._full_path,
+                mode=mode,
+                encoding="utf-8",
+            ) as file:
+                await file.write(content)
+        except OSError as error:
+            self._write_errors += 1
+
+            raise StorageError(
+                f"JSON finalize error: {error}"
+            ) from error
+
+    async def _finalize_with_retry(self) -> None:
+        for attempt in range(3):
+            try:
+                await self._finalize()
+                return
+            except StorageError:
+                if attempt == 2:
+                    raise
+
+                await asyncio.sleep(2 ** attempt)
+
     async def save(self, data: dict) -> None:
-        row = (
-            json.dumps(
-                data,
-                ensure_ascii=False,
-                default=str,
-            )
-            + "\n"
+        if self._closed:
+            raise StorageError("JSON storage is closed")
+
+        row = json.dumps(
+            data,
+            ensure_ascii=False,
+            default=str,
+            indent=self._indent if self._formatted else None,
         )
+
+        if self._formatted:
+            padding = " " * self._indent
+            row = "\n".join(
+                f"{padding}{line}"
+                for line in row.splitlines()
+            )
+        else:
+            row += "\n"
 
         async with self._lock:
             self._buffer.append(row)
@@ -95,9 +158,27 @@ class JSONStorage(DataStorage):
 
     async def close(self) -> None:
         async with self._lock:
+            if self._closed:
+                return
+
             await self._flush_with_retry()
+            await self._finalize_with_retry()
+            self._closed = True
 
     async def read(self):
+        if self._formatted:
+            async with aiofiles.open(
+                self._full_path,
+                mode="r",
+                encoding="utf-8",
+            ) as file:
+                content = await file.read()
+
+            for row in json.loads(content):
+                yield row
+
+            return
+
         async with aiofiles.open(
             self._full_path,
             mode="r",

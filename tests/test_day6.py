@@ -71,6 +71,33 @@ class DataStorageTests(unittest.TestCase):
 
 
 class JSONStorageTests(TemporaryStorageTestCase):
+    async def test_supports_formatted_json_output(self) -> None:
+        storage = JSONStorage(
+            "pages-pretty.json",
+            formatted=True,
+            indent=2,
+        )
+        storage._batch_size = 1
+        first = storage_record()
+        second = storage_record(
+            url="https://example.test/second",
+        )
+
+        await storage.save(first)
+        await storage.save(second)
+        await storage.close()
+
+        raw = storage._full_path.read_text(encoding="utf-8")
+        parsed = json.loads(raw)
+        saved = [row async for row in storage.read()]
+
+        self.assertTrue(raw.startswith("[\n"))
+        self.assertIn('\n  {\n    "url"', raw)
+        self.assertEqual(len(parsed), 2)
+        self.assertEqual(saved, parsed)
+        self.assertEqual(parsed[0]["url"], first["url"])
+        self.assertEqual(parsed[1]["url"], second["url"])
+
     async def test_saves_json_lines_and_preserves_data(self) -> None:
         storage = JSONStorage("pages.jsonl")
         storage._batch_size = 2
@@ -381,6 +408,23 @@ class AsyncCrawlerStorageTests(unittest.IsolatedAsyncioTestCase):
         messages = "\n".join(logs.output)
         self.assertIn(URL, messages)
         self.assertIn("StorageError", messages)
+
+    async def test_final_storage_error_is_logged_without_crash(self) -> None:
+        storage = AsyncMock(spec=DataStorage)
+        storage.close.side_effect = StorageError("final flush failed")
+        crawler, session = self.make_crawler(storage)
+
+        await crawler.crawl([URL], max_pages=1)
+
+        with self.assertLogs("crawler", level="ERROR") as logs:
+            await crawler.close()
+
+        self.assertTrue(session.closed)
+        storage.close.assert_awaited_once()
+        messages = "\n".join(logs.output)
+        self.assertIn("Ошибка закрытия хранилища", messages)
+        self.assertIn("StorageError", messages)
+        self.assertIn("final flush failed", messages)
 
 
 if __name__ == "__main__":

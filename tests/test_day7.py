@@ -28,6 +28,7 @@ CHILD_SITEMAP_URL = "https://example.test/sitemap-pages.xml"
 NESTED_SITEMAP_URL = "https://example.test/sitemap-nested.xml"
 PAGE_ONE = "https://example.test/one"
 PAGE_TWO = "https://example.test/two"
+START_PAGE = "https://start.test/"
 
 
 class FakeResponse:
@@ -299,6 +300,56 @@ class SitemapParserTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(PAGE_TWO, crawler.visited_urls)
         self.assertEqual(session.requested_urls, [SITEMAP_URL, PAGE_ONE])
 
+    async def test_start_and_sitemap_domains_are_both_allowed(self) -> None:
+        sitemap_xml = f"""
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+          <url><loc>{PAGE_ONE}</loc></url>
+        </urlset>
+        """
+        session = FakeSession({
+            SITEMAP_URL: FakeResponse(sitemap_xml),
+            START_PAGE: FakeResponse(
+                "<html>start</html>",
+                content_type="text/html",
+            ),
+            PAGE_ONE: FakeResponse(
+                "<html>page</html>",
+                content_type="text/html",
+            ),
+        })
+
+        with patch(
+            "src.models.aiohttp.ClientSession",
+            return_value=session,
+        ):
+            crawler = AsyncCrawler(
+                max_concurrent=2,
+                max_depth=0,
+                requests_per_second=1_000_000,
+                min_delay=0,
+            )
+
+        self.addAsyncCleanup(crawler.close)
+        crawler._wait_before_request = AsyncMock()
+        crawler._parser.parse_html = AsyncMock(
+            side_effect=lambda _html, url: {
+                "url": url,
+                "title": url,
+                "text": "page",
+                "links": [],
+                "metadata": {},
+            }
+        )
+
+        results = await crawler.crawl(
+            start_urls=[START_PAGE],
+            sitemap_urls=[SITEMAP_URL],
+            max_pages=2,
+            same_domain_only=True,
+        )
+
+        self.assertEqual(set(results), {START_PAGE, PAGE_ONE})
+
     async def test_broken_sitemap_does_not_stop_start_url_crawl(self) -> None:
         session = FakeSession({
             SITEMAP_URL: FakeResponse("error", status=503),
@@ -380,6 +431,9 @@ class CrawlerStatsTests(unittest.TestCase):
             error_type="PermanentError",
             permanent=True,
         )
+        stats.record_robots_blocked(
+            "https://example.test/private"
+        )
         stats.set_retry_stats({
             "total_retries": 2,
             "successful_after_retry": 1,
@@ -405,8 +459,13 @@ class CrawlerStatsTests(unittest.TestCase):
             exported = json.loads(json_path.read_text(encoding="utf-8"))
             html = html_path.read_text(encoding="utf-8")
 
-        self.assertEqual(exported["total_pages"], 2)
+        self.assertEqual(exported["total_pages"], 3)
         self.assertEqual(exported["successful"], 1)
+        self.assertEqual(exported["robots_blocked"], 1)
+        self.assertEqual(
+            exported["robots_blocked_urls"],
+            ["https://example.test/private"],
+        )
         self.assertEqual(
             exported["errors_by_type"],
             {
@@ -425,6 +484,8 @@ class CrawlerStatsTests(unittest.TestCase):
         self.assertIn("Errors by type", html)
         self.assertIn("Retry statistics", html)
         self.assertIn("Permanent error URLs", html)
+        self.assertIn("Robots.txt blocked URLs", html)
+        self.assertIn("https://example.test/private", html)
         self.assertIn("bar-container", html)
 
 
@@ -472,6 +533,21 @@ class ConfigurationAndCLITests(unittest.TestCase):
         csv_storage.assert_called_once_with(
             "pages.csv",
             encoding="utf-8-sig",
+        )
+
+    def test_storage_factory_passes_json_formatting(self) -> None:
+        with patch("src.config.JSONStorage") as json_storage:
+            create_storage({
+                "type": "json",
+                "filename": "pages.json",
+                "formatted": True,
+                "indent": 2,
+            })
+
+        json_storage.assert_called_once_with(
+            "pages.json",
+            formatted=True,
+            indent=2,
         )
 
     def test_cli_parses_all_required_arguments(self) -> None:
@@ -537,6 +613,24 @@ class ConfigurationAndCLITests(unittest.TestCase):
         self.assertEqual(result["crawler"]["max_depth"], 4)
         self.assertTrue(result["crawler"]["respect_robots"])
         self.assertEqual(result["crawler"]["requests_per_second"], 3.0)
+
+
+class AdvancedCrawlerConstructionTests(unittest.TestCase):
+    def test_from_config_data_does_not_require_event_loop(self) -> None:
+        config = {
+            "crawler": {"max_concurrent": 2},
+            "crawl": {"start_urls": [PAGE_ONE]},
+            "storage": {"type": "json", "filename": "pages.jsonl"},
+        }
+
+        with (
+            patch("src.crawler.create_storage", return_value=MagicMock()),
+            patch("src.models.aiohttp.ClientSession") as session_constructor,
+        ):
+            crawler = AdvancedCrawler.from_config_data(config)
+
+        session_constructor.assert_not_called()
+        self.assertEqual(crawler._crawl_config, config["crawl"])
 
 
 class AdvancedCrawlerTests(unittest.IsolatedAsyncioTestCase):

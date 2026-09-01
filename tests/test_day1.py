@@ -92,6 +92,15 @@ class FakeSession:
         self.closed = True
 
 
+class AsyncCrawlerConstructionTests(unittest.TestCase):
+    def test_constructor_does_not_require_running_event_loop(self) -> None:
+        with patch("src.models.aiohttp.ClientSession") as constructor:
+            crawler = AsyncCrawler()
+
+        constructor.assert_not_called()
+        self.assertIsNone(crawler._session)
+
+
 class AsyncCrawlerTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def make_crawler(
@@ -121,6 +130,7 @@ class AsyncCrawlerTests(unittest.IsolatedAsyncioTestCase):
                 read_timeout=2.5,
                 total_timeout=7.5,
             )
+            await crawler._ensure_session()
 
         timeout = session_constructor.call_args.kwargs["timeout"]
         self.assertEqual(timeout.connect, 1.5)
@@ -280,11 +290,23 @@ class AsyncCrawlerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertLess(concurrent_time, sequential_time * 0.6)
 
-    async def test_close_closes_session(self) -> None:
+    async def test_close_closes_created_session(self) -> None:
+        url = "https://example.test/page"
+        session = FakeSession({url: Route(body="page")})
+        crawler = self.make_crawler(session)
+
+        await crawler.fetch_url(url)
+        await crawler.close()
+
+        self.assertTrue(session.closed)
+
+    async def test_async_context_manager_closes_session(self) -> None:
         session = FakeSession({})
         crawler = self.make_crawler(session)
 
-        await crawler.close()
+        async with crawler as entered:
+            self.assertIs(entered, crawler)
+            self.assertFalse(session.closed)
 
         self.assertTrue(session.closed)
 

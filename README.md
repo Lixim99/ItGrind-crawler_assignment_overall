@@ -150,6 +150,19 @@ python -m src.main \
 
 Одна страница записывается одной JSON-строкой. Такой формат не требует держать весь результат в памяти.
 
+### Форматированный JSON
+
+```json
+{
+  "type": "json",
+  "filename": "crawler.json",
+  "formatted": true,
+  "indent": 2
+}
+```
+
+В этом режиме страницы сохраняются как корректный JSON-массив с отступами. Запись по-прежнему выполняется асинхронно и сбрасывается пакетами, поэтому весь набор страниц не хранится в памяти.
+
 ### CSV
 
 ```json
@@ -194,7 +207,7 @@ async def main() -> None:
         user_agent="MyBot/1.0",
     )
 
-    try:
+    async with crawler:
         results = await crawler.crawl(
             start_urls=["https://example.com/"],
             max_pages=50,
@@ -202,8 +215,6 @@ async def main() -> None:
         )
         print(results)
         print(crawler.get_stats())
-    finally:
-        await crawler.close()
 
 
 asyncio.run(main())
@@ -225,6 +236,8 @@ asyncio.run(main())
 | `close()` | Закрыть HTTP-сессию и хранилище |
 
 После `crawl()` доступны свойства `visited_urls`, `processed_urls` и `failed_urls`.
+
+Конструктор не создаёт `aiohttp.ClientSession`, поэтому `AsyncCrawler()` и `AdvancedCrawler.from_config_data()` можно безопасно вызывать без активного event loop. Одна общая сессия лениво создаётся при первом сетевом вызове или входе в `async with`; `close()` можно вызывать повторно.
 
 ### AdvancedCrawler
 
@@ -281,10 +294,18 @@ retry_strategy = RetryStrategy(
     max_retries=3,
     backoff_factor=2,
     retry_on=[TransientError, NetworkError],
+    max_retries_by_type={
+        TransientError: 3,
+        NetworkError: 2,
+    },
+    backoff_factors_by_type={
+        TransientError: 2.0,
+        NetworkError: 1.5,
+    },
 )
 ```
 
-`fetch_url()`, `fetch_urls()`, `fetch_and_parse()` и `crawl()` автоматически повторяют временные и сетевые ошибки. HTTP 429 получает увеличенную задержку. HTTP 401/403/404 классифицируются как постоянные и не повторяются. После исчерпания попыток публичные методы могут вернуть или передать вызывающему коду итоговый `TransientError`, `NetworkError`, `PermanentError` либо `RobotsBlockedError` согласно своему контракту.
+`max_retries` и `backoff_factor` задают общую стратегию, а `max_retries_by_type` и `backoff_factors_by_type` позволяют переопределить её для отдельных исключений. Retry-лог содержит URL, тип ошибки, номер попытки, задержку и итоговый исход. `fetch_url()`, `fetch_urls()`, `fetch_and_parse()` и `crawl()` автоматически повторяют временные и сетевые ошибки. HTTP 429 получает увеличенную задержку. HTTP 401/403/404 классифицируются как постоянные и не повторяются.
 
 ## Формат сохраняемой страницы
 
@@ -301,7 +322,7 @@ retry_strategy = RetryStrategy(
 }
 ```
 
-Файловые хранилища, конфигурации демонстраций и отчёты создаются внутри `public/uploads/` через общую константу `GLOBAL_UPLOAD_PATH`. Ошибка записи логируется и не останавливает обработку остальных страниц.
+Файловые хранилища, конфигурации демонстраций и отчёты создаются внутри `public/uploads/` через общую константу `GLOBAL_UPLOAD_PATH`. Ошибка записи логируется и не останавливает обработку остальных страниц. Если окончательно не удалось сбросить оставшийся буфер при `close()`, ошибка также логируется, но не приводит к падению краулера.
 
 ## Логирование и отчёты
 
@@ -314,7 +335,7 @@ retry_strategy = RetryStrategy(
 - три резервных файла.
 
 HTML-отчёт содержит итоговую таблицу, распределение HTTP-статусов, топ доменов, классификацию ошибок, retry-метрики и список URL с постоянными ошибками.
-JSON, указанный через CLI-параметр `--output`, содержит собранные страницы. Статистика с классификацией ошибок и retry-метриками доступна через `get_stats()`, `export_to_json()` и HTML-отчёт.
+JSON, указанный через CLI-параметр `--output`, содержит собранные страницы. Статистика с классификацией ошибок, retry-метриками, количеством и списком URL, заблокированных `robots.txt`, доступна через `get_stats()`, `export_to_json()` и HTML-отчёт.
 
 ## Benchmark и масштабируемость
 
