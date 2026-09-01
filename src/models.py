@@ -86,14 +86,11 @@ class AsyncCrawler:
         self._total_timeout = total_timeout
         self._storage = storage
 
-        timeout = self._get_timeout()
-
-        self._session = aiohttp.ClientSession(
-            timeout=timeout,
-            headers={
-                "User-Agent": self._user_agent
-            }
-        )
+        self._session_factory = aiohttp.ClientSession
+        self._session: aiohttp.ClientSession | None = None
+        self._session_lock: asyncio.Lock | None = None
+        self._robots_parser: RobotsParser | None = None
+        self._closed = False
 
         self._semaphore = SemaphoreManager(
             max_tasks=max_concurrent,
@@ -121,11 +118,6 @@ class AsyncCrawler:
         self._blocked_urls: set[str] = set()
         self._stats = CrawlerStats()
 
-        self._robots_parser = RobotsParser(
-            self._session,
-            before_request=self._wait_before_robots_request,
-        )
-
         # Отдельный limiter для Crawl-delay каждого домена.
         self._robots_limiters: dict[
             str,
@@ -148,10 +140,52 @@ class AsyncCrawler:
             ],
         )
 
+    async def __aenter__(self) -> "AsyncCrawler":
+        await self._ensure_session()
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        await self.close()
+
+    async def _ensure_session(self) -> aiohttp.ClientSession:
+        if self._closed:
+            raise RuntimeError("AsyncCrawler is closed")
+
+        if self._session is not None:
+            return self._session
+
+        if self._session_lock is None:
+            self._session_lock = asyncio.Lock()
+
+        async with self._session_lock:
+            if self._session is None:
+                self._session = self._session_factory(
+                    timeout=self._get_timeout(),
+                    headers={
+                        "User-Agent": self._user_agent
+                    },
+                )
+                self._robots_parser = RobotsParser(
+                    self._session,
+                    before_request=self._wait_before_robots_request,
+                )
+
+        session = self._session
+
+        if session is None:
+            raise RuntimeError("ClientSession is not initialized")
+
+        return session
+
     async def _get_robots_parser(
         self,
         url: str,
     ) -> RobotsParser:
+        await self._ensure_session()
+
+        if self._robots_parser is None:
+            raise RuntimeError("RobotsParser is not initialized")
+
         await self._robots_parser.fetch_robots(url)
 
         return self._robots_parser
@@ -339,7 +373,8 @@ class AsyncCrawler:
             )
 
         return await self._retry_strategy.execute_with_retry(
-            fetch_attempt
+            fetch_attempt,
+            retry_url=url,
         )
 
     async def _fetch_url_once(
@@ -347,6 +382,8 @@ class AsyncCrawler:
         url: str,
         timeout_multiplier: float = 1.0,
     ) -> str:
+        session = await self._ensure_session()
+
         crawler_logger.info("Начало загрузки: %s", url)
 
         await self._wait_before_request(url)
@@ -357,7 +394,7 @@ class AsyncCrawler:
 
             timeout = self._get_timeout(multiplier=timeout_multiplier)
 
-            async with self._session.get(
+            async with session.get(
                 url,
                 timeout=timeout
             ) as response:
@@ -468,10 +505,25 @@ class AsyncCrawler:
         return results
 
     async def close(self) -> None:
-        await self._session.close()
+        if self._closed:
+            return
 
-        if self._storage:
-            await self._storage.close()
+        self._closed = True
+
+        try:
+            if self._session is not None:
+                await self._session.close()
+        finally:
+            if self._storage:
+                try:
+                    await self._storage.close()
+                except Exception as error:
+                    crawler_logger.error(
+                        "Ошибка закрытия хранилища | тип: %s | "
+                        "сообщение: %s",
+                        type(error).__name__,
+                        error,
+                    )
 
     async def fetch_and_parse(self, url: str) -> dict:
         page_html = await self.fetch_url(url)
@@ -508,7 +560,10 @@ class AsyncCrawler:
         include_patterns = include_patterns or []
         exclude_patterns = exclude_patterns or []
 
-        domain_sources = start_urls or (sitemap_urls or [])
+        domain_sources = [
+            *start_urls,
+            *(sitemap_urls or []),
+        ]
         allowed_domains = {
             urlparse(normalized_url).netloc
             for raw_url in domain_sources
@@ -522,8 +577,9 @@ class AsyncCrawler:
         seed_urls = list(start_urls)
 
         if sitemap_urls:
+            session = await self._ensure_session()
             sitemap_parser = SitemapParser(
-                self._session,
+                session,
                 before_request=self._wait_before_sitemap_request,
             )
 
@@ -698,6 +754,7 @@ class AsyncCrawler:
                         self._queue.add_url(next_url, priority=next_depth)
             except RobotsBlockedError:
                 self._blocked_urls.add(url)
+                self._stats.record_robots_blocked(url)
                 self._queue.mark_processed(url)
 
             except Exception as error:

@@ -34,8 +34,17 @@ def create_storage(
     )
 
     if storage_type == "json":
+        options = {}
+
+        if "formatted" in config:
+            options["formatted"] = config["formatted"]
+
+        if "indent" in config:
+            options["indent"] = config["indent"]
+
         return JSONStorage(
-            config["filename"]
+            config["filename"],
+            **options,
         )
 
     if storage_type == "csv":

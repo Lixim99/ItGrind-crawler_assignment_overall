@@ -14,11 +14,13 @@ class CrawlerStats:
 
         self._successful = 0
         self._failed = 0
+        self._robots_blocked = 0
 
         self._status_codes = Counter()
         self._domains = Counter()
         self._errors_by_type = Counter()
         self._permanent_error_urls: list[str] = []
+        self._robots_blocked_urls: list[str] = []
         self._retry_stats = {
             "total_retries": 0,
             "successful_after_retry": 0,
@@ -79,6 +81,18 @@ class CrawlerStats:
         if permanent and url not in self._permanent_error_urls:
             self._permanent_error_urls.append(url)
 
+    def record_robots_blocked(
+        self,
+        url: str,
+    ) -> None:
+        self._robots_blocked += 1
+
+        domain = urlparse(url).netloc
+        self._domains[domain] += 1
+
+        if url not in self._robots_blocked_urls:
+            self._robots_blocked_urls.append(url)
+
     def set_retry_stats(
         self,
         retry_stats: dict,
@@ -89,6 +103,7 @@ class CrawlerStats:
         total_pages = (
             self._successful
             + self._failed
+            + self._robots_blocked
         )
 
         if self._started_at is None:
@@ -125,6 +140,7 @@ class CrawlerStats:
             "total_pages": total_pages,
             "successful": self._successful,
             "failed": self._failed,
+            "robots_blocked": self._robots_blocked,
             "average_speed": average_speed,
             "status_codes": dict(
                 self._status_codes
@@ -137,6 +153,9 @@ class CrawlerStats:
             ),
             "permanent_error_urls": list(
                 self._permanent_error_urls
+            ),
+            "robots_blocked_urls": list(
+                self._robots_blocked_urls
             ),
             "retry_stats": dict(
                 self._retry_stats
@@ -176,6 +195,7 @@ class CrawlerStats:
         top_domains = stats["top_domains"]
         errors_by_type = stats["errors_by_type"]
         permanent_error_urls = stats["permanent_error_urls"]
+        robots_blocked_urls = stats["robots_blocked_urls"]
         retry_stats = stats["retry_stats"]
 
         max_status_count = max(
@@ -252,6 +272,10 @@ class CrawlerStats:
         permanent_error_rows = "".join(
             f"<tr><td>{escape(url)}</td></tr>"
             for url in permanent_error_urls
+        )
+        robots_blocked_rows = "".join(
+            f"<tr><td>{escape(url)}</td></tr>"
+            for url in robots_blocked_urls
         )
 
         html = f"""
@@ -337,6 +361,11 @@ class CrawlerStats:
               </tr>
 
               <tr>
+                  <td>Blocked by robots.txt</td>
+                  <td>{stats["robots_blocked"]}</td>
+              </tr>
+
+              <tr>
                   <td>Average speed</td>
                   <td>{stats["average_speed"]:.2f} pages/sec</td>
               </tr>
@@ -404,6 +433,13 @@ class CrawlerStats:
           <table>
               <tr><th>URL</th></tr>
               {permanent_error_rows}
+          </table>
+
+          <h2>Robots.txt blocked URLs</h2>
+
+          <table>
+              <tr><th>URL</th></tr>
+              {robots_blocked_rows}
           </table>
       </body>
       </html>

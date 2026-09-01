@@ -247,7 +247,7 @@ class HTMLParserTests(unittest.IsolatedAsyncioTestCase):
         with patch(
             "src.models.aiohttp.ClientSession",
             return_value=session,
-        ):
+        ) as session_constructor:
             crawler = AsyncCrawler()
 
         with patch.object(
@@ -262,7 +262,8 @@ class HTMLParserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["title"], "Test page")
 
         await crawler.close()
-        session.close.assert_awaited_once()
+        session_constructor.assert_not_called()
+        session.close.assert_not_awaited()
 
 
 if __name__ == "__main__":

@@ -232,6 +232,7 @@ class AsyncCrawlerDay4Tests(unittest.IsolatedAsyncioTestCase):
                 min_delay=0,
                 user_agent="MyBot/1.0",
             )
+            await crawler._ensure_session()
 
         self.addAsyncCleanup(crawler.close)
 
@@ -368,6 +369,12 @@ class AsyncCrawlerDay4Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results, {})
         self.assertEqual(crawler.failed_urls, {})
         self.assertEqual(crawler.get_request_stats()["robots_blocked"], 1)
+        stats = crawler.get_stats()
+        self.assertEqual(stats["total_pages"], 1)
+        self.assertEqual(stats["successful"], 0)
+        self.assertEqual(stats["failed"], 0)
+        self.assertEqual(stats["robots_blocked"], 1)
+        self.assertEqual(stats["robots_blocked_urls"], [PRIVATE_URL])
         self.assertEqual(session.requested_urls, [ROBOTS_URL])
         self.assertIn("robots blocked: 1", "\n".join(logs.output))
 
