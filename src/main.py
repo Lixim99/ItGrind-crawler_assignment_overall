@@ -25,6 +25,7 @@ load_dotenv()
 setup_logging()
 
 DEMO_USER_AGENT = "MyCrawlerDemo/1.0"
+DEMO_USER_AGENT_TOKEN = DEMO_USER_AGENT.split("/", 1)[0]
 
 
 async def _write_json(filename: str | Path, data: object) -> Path:
@@ -135,7 +136,7 @@ async def _demo_site() -> AsyncGenerator[str]:
     async def robots(_request: web.Request) -> web.Response:
         return web.Response(
             text=(
-                f"User-agent: {DEMO_USER_AGENT}\n"
+                f"User-agent: {DEMO_USER_AGENT_TOKEN}\n"
                 "Disallow: /private\n"
                 "Crawl-delay: 1\n\n"
                 "User-agent: *\n"

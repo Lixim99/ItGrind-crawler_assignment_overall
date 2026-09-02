@@ -414,6 +414,44 @@ class AsyncCrawlerDay3Tests(unittest.IsolatedAsyncioTestCase):
             ROOT_URL,
         )
 
+    def test_normalize_url_canonicalizes_host_and_default_port(self) -> None:
+        self.assertEqual(
+            normalize_url(
+                "HTTPS://Example.TEST:443",
+                ROOT_URL,
+            ),
+            ROOT_URL,
+        )
+        self.assertEqual(
+            normalize_url(
+                "http://Example.TEST:80/path",
+                ROOT_URL,
+            ),
+            "http://example.test/path",
+        )
+        self.assertEqual(
+            normalize_url(
+                "https://Example.TEST:8443/path",
+                ROOT_URL,
+            ),
+            "https://example.test:8443/path",
+        )
+
+    async def test_host_case_and_default_port_do_not_create_duplicates(
+        self,
+    ) -> None:
+        crawler = self.make_crawler(max_depth=0)
+        fetch_mock = self.install_graph(crawler, {ROOT_URL: []})
+
+        results = await crawler.crawl([
+            "HTTPS://Example.TEST:443",
+            ROOT_URL,
+        ])
+
+        self.assertEqual(set(results), {ROOT_URL})
+        self.assertEqual(crawler.visited_urls, {ROOT_URL})
+        fetch_mock.assert_awaited_once()
+
     async def test_crawl_respects_max_pages(self) -> None:
         crawler = self.make_crawler(max_depth=1)
         graph = {
