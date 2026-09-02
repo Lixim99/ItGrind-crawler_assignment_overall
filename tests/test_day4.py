@@ -136,6 +136,30 @@ class RobotsParserTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(parser.can_fetch(PRIVATE_URL, "MyBot"))
         self.assertEqual(parser.get_crawl_delay("MyBot"), 2.0)
 
+    async def test_matches_versioned_agent_and_fractional_delay(
+        self,
+    ) -> None:
+        robots = """
+        User-agent: MyBot
+        Disallow: /private
+        Crawl-delay: 0.5
+
+        User-agent: *
+        Allow: /
+        """
+        session = FakeSession({ROBOTS_URL: Route(body=robots)})
+        parser = RobotsParser(session)
+
+        await parser.fetch_robots(f"{DOMAIN}/page")
+
+        self.assertFalse(
+            parser.can_fetch(PRIVATE_URL, "MyBot/1.0")
+        )
+        self.assertEqual(
+            parser.get_crawl_delay("MyBot/1.0"),
+            0.5,
+        )
+
     async def test_concurrent_calls_download_robots_once(self) -> None:
         session = FakeSession({
             ROBOTS_URL: Route(
@@ -271,13 +295,13 @@ class AsyncCrawlerDay4Tests(unittest.IsolatedAsyncioTestCase):
         robots = """
         User-agent: MyBot
         Allow: /
-        Crawl-delay: 2
+        Crawl-delay: 0.5
         """
         session = FakeSession({ROBOTS_URL: Route(body=robots)})
         crawler = self.make_crawler(
             session,
             respect_robots=True,
-            user_agent="MyBot",
+            user_agent="MyBot/1.0",
         )
         self.addAsyncCleanup(crawler.close)
         crawler._rate_limiter.acquire = AsyncMock()
@@ -290,7 +314,7 @@ class AsyncCrawlerDay4Tests(unittest.IsolatedAsyncioTestCase):
         ) as limiter_factory:
             await crawler._wait_before_request(f"{DOMAIN}/public")
 
-        limiter_factory.assert_called_once_with("example.test", 2.0)
+        limiter_factory.assert_called_once_with("example.test", 0.5)
         robots_limiter.acquire.assert_awaited_once_with()
         self.assertEqual(session.requested_urls, [ROBOTS_URL])
 

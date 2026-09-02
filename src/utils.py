@@ -76,13 +76,44 @@ def normalize_url(value: str, base_url: str) -> str | None:
     absolute_url, _ = urldefrag(absolute_url)
     parsed = urlparse(absolute_url)
 
-    if parsed.scheme not in {"http", "https"}:
+    scheme = parsed.scheme.lower()
+
+    if scheme not in {"http", "https"}:
         return None
 
-    if not parsed.netloc:
-        return
+    hostname = parsed.hostname
 
-    if not parsed.path:
-        parsed = parsed._replace(path="/")
+    if hostname is None:
+        return None
+
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+
+    host = hostname.lower()
+
+    if ":" in host:
+        host = f"[{host}]"
+
+    is_default_port = (
+        scheme == "http" and port == 80
+    ) or (
+        scheme == "https" and port == 443
+    )
+
+    if port is not None and not is_default_port:
+        host = f"{host}:{port}"
+
+    user_info = ""
+
+    if "@" in parsed.netloc:
+        user_info = f"{parsed.netloc.rsplit('@', 1)[0]}@"
+
+    parsed = parsed._replace(
+        scheme=scheme,
+        netloc=f"{user_info}{host}",
+        path=parsed.path or "/",
+    )
 
     return parsed.geturl()
